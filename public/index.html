@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#f4f7f2">
+  <title>拾词 · 英语单词学习</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#home" aria-label="返回首页">
+        <span class="brand-mark">拾</span>
+        <span><strong>拾词</strong><small>每天一点，记得更久</small></span>
+      </a>
+      <nav aria-label="主要导航">
+        <button class="nav-item active" data-view="home"><span>⌂</span>今日学习</button>
+        <button class="nav-item" data-view="import"><span>＋</span>添加单词</button>
+        <button class="nav-item" data-view="library"><span>▤</span>我的词库</button>
+        <button class="nav-item" data-view="data"><span>⚙</span>数据与设置</button>
+      </nav>
+      <div class="sidebar-note"><span class="status-dot"></span>全部数据仅保存在本机</div>
+    </aside>
+
+    <main>
+      <header class="mobile-header">
+        <a class="brand" href="#home"><span class="brand-mark">拾</span><strong>拾词</strong></a>
+        <button id="mobile-menu" class="icon-button" aria-label="打开菜单">☰</button>
+      </header>
+
+      <section id="view-home" class="view active">
+        <div class="welcome-row">
+          <div><p class="eyebrow" id="today-label">今天</p><h1>准备好开始了吗？</h1><p class="lead">先完成到期复习，再认识 10 个新朋友。</p></div>
+          <div class="streak-badge"><span>✦</span><strong id="streak-count">0</strong><small>连续学习</small></div>
+        </div>
+        <div class="stats-grid">
+          <article class="stat-card review"><span class="stat-icon">↻</span><div><small>今日待复习</small><strong id="due-count">0</strong><p>按记忆节奏准时见面</p></div></article>
+          <article class="stat-card new"><span class="stat-icon">＋</span><div><small>今日新单词</small><strong id="new-count">0</strong><p>每天最多学习 10 个</p></div></article>
+          <article class="stat-card mastered"><span class="stat-icon">✓</span><div><small>累计已掌握</small><strong id="mastered-count">0</strong><p>完成 30 天复习周期</p></div></article>
+        </div>
+        <article class="today-panel">
+          <div><p class="eyebrow">TODAY'S PLAN</p><h2>今日学习计划</h2><p id="plan-summary">词库还是空的，先添加一些单词吧。</p></div>
+          <button id="start-study" class="primary-button">开始学习 <span>→</span></button>
+        </article>
+        <div class="home-grid">
+          <article class="panel"><div class="panel-title"><h3>最近易错词</h3><button class="text-button" data-go="library">查看全部</button></div><div id="trouble-list" class="word-mini-list empty-state">还没有错词记录</div></article>
+          <article class="panel tip-panel"><span class="tip-icon">☼</span><div><h3>记忆小提示</h3><p>先听一遍发音，再把单词分成几个音节读出来，拼写会更轻松。</p></div></article>
+        </div>
+      </section>
+
+      <section id="view-import" class="view">
+        <div class="page-heading"><div><p class="eyebrow">ADD WORDS</p><h1>添加单词</h1><p class="lead">上传教材单词表照片，识别后先校对，再存入词库。</p></div></div>
+        <div class="mode-tabs"><button class="tab active" data-import-mode="photo">照片识别</button><button class="tab" data-import-mode="manual">手工录入</button></div>
+        <div id="photo-import" class="import-mode active">
+          <label id="drop-zone" class="drop-zone">
+            <input id="image-input" type="file" accept="image/jpeg,image/png" multiple hidden>
+            <span class="upload-icon">⌁</span><h2>拖入教材单词表照片</h2><p>或者点击选择 JPG、JPEG、PNG 文件，可一次选择多张</p><span class="secondary-button">选择照片</span>
+          </label>
+          <div id="ocr-progress" class="ocr-progress hidden"><div class="spinner"></div><div><strong id="ocr-status">正在准备本地识别模型……</strong><div class="progress-track"><span id="ocr-progress-bar"></span></div><small>首次加载需要一点时间，照片不会上传到网络</small></div></div>
+          <article id="ocr-retry" class="ocr-retry hidden">
+            <div class="retry-preview"><img id="ocr-retry-preview" alt="等待重新识别的照片预览"></div>
+            <div><h3>这张照片需要调整方向</h3><p>识别到的成对词条较少。请旋转照片后重新识别，照片仍只在本机处理。</p><div class="retry-actions"><button id="rotate-left" type="button" class="secondary-button">↶ 向左旋转</button><button id="rotate-right" type="button" class="secondary-button">↷ 向右旋转</button><button id="retry-ocr" type="button" class="primary-button">重新识别</button></div></div>
+          </article>
+        </div>
+        <div id="manual-import" class="import-mode">
+          <article class="panel manual-panel"><p>每行输入一组，用制表符或中文冒号分隔英文和中文释义。</p><textarea id="manual-text" rows="10" placeholder="example	例子；实例&#10;remember	记得；记住"></textarea><button id="parse-manual" class="primary-button">生成校对表</button></article>
+        </div>
+        <article id="candidate-panel" class="panel candidate-panel hidden">
+          <div class="panel-title"><div><p class="eyebrow">CHECK BEFORE SAVING</p><h2>请校对识别结果</h2></div><button id="add-row" class="secondary-button">＋ 添加一行</button></div>
+          <p class="muted">可以直接修改内容或删除不需要的行。允许相同英文重复保存。</p>
+          <div class="table-wrap"><table><thead><tr><th>#</th><th>英文</th><th>中文释义</th><th>识别状态</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="candidate-body"></tbody></table></div>
+          <div class="panel-actions"><span id="candidate-count">0 个词条</span><button id="confirm-import" class="primary-button">确认存入词库</button></div>
+        </article>
+      </section>
+
+      <section id="view-library" class="view">
+        <div class="page-heading"><div><p class="eyebrow">MY WORDS</p><h1>我的词库</h1><p class="lead">所有单词都在这里，可以随时修改或重新学习。</p></div><button id="library-add" class="primary-button">＋ 添加单词</button></div>
+        <article class="panel">
+          <div class="library-toolbar"><label class="search-box">⌕<input id="word-search" type="search" placeholder="搜索英文或中文释义"></label><select id="status-filter"><option value="all">全部状态</option><option value="new">未学习</option><option value="review">复习中</option><option value="mastered">已掌握</option></select></div>
+          <div class="table-wrap"><table><thead><tr><th>英文</th><th>中文释义</th><th>状态</th><th>下次复习</th><th>错误</th><th>操作</th></tr></thead><tbody id="library-body"></tbody></table></div>
+          <div id="library-empty" class="empty-state hidden">没有找到符合条件的单词</div>
+        </article>
+      </section>
+
+      <section id="view-data" class="view">
+        <div class="page-heading"><div><p class="eyebrow">LOCAL DATA</p><h1>数据与设置</h1><p class="lead">管理本机学习数据与备份。</p></div></div>
+        <div class="settings-grid">
+          <article class="panel setting-card"><span class="setting-icon">⇩</span><div><h2>导出备份</h2><p>下载完整词库和学习记录，建议定期保存到安全位置。</p><a class="secondary-button inline-button" href="/api/backup" download>导出 JSON 备份</a></div></article>
+          <article class="panel setting-card"><span class="setting-icon">⇧</span><div><h2>恢复备份</h2><p>恢复会替换当前数据，系统会先自动保留一份旧数据。</p><label class="secondary-button inline-button">选择备份文件<input id="restore-input" type="file" accept="application/json" hidden></label></div></article>
+          <article class="panel setting-card danger-card"><span class="setting-icon">□</span><div><h2>退出工具</h2><p>保存当前数据并停止本地服务，之后可以关闭浏览器页面。</p><button id="shutdown" class="secondary-button inline-button">安全退出</button></div></article>
+        </div>
+      </section>
+
+      <section id="view-study" class="view study-view">
+        <div class="study-topbar"><button id="leave-study" class="icon-button" aria-label="退出学习">×</button><div class="study-progress"><span id="study-phase">认读新词</span><div class="progress-track"><span id="study-progress-bar"></span></div></div><span id="study-counter">1 / 10</span></div>
+        <div id="study-card" class="study-card">
+          <div id="familiarize-card" class="card-content">
+            <p class="eyebrow">先认识一下</p><button class="sound-button" data-speak-current aria-label="播放发音">♬</button><h1 id="familiar-word">example</h1><p id="familiar-meaning" class="card-meaning">例子；实例</p><button id="next-familiar" class="primary-button wide">我记住了，继续 <span>→</span></button>
+          </div>
+          <form id="spelling-card" class="card-content hidden">
+            <p class="eyebrow">听发音，看中文，拼出英文</p><button type="button" class="sound-button" data-speak-current aria-label="播放发音">♬</button><p id="spell-meaning" class="spell-meaning">例子；实例</p><label class="answer-label">请输入英文<input id="spelling-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false"></label><div id="answer-feedback" class="answer-feedback hidden"></div><button id="submit-spelling" class="primary-button wide" type="submit">提交答案</button>
+          </form>
+        </div>
+        <div id="study-complete" class="study-complete hidden"><span class="complete-mark">✓</span><p class="eyebrow">TODAY COMPLETE</p><h1>今天的任务完成啦！</h1><p id="complete-summary">每一次认真回想，都在让记忆变得更牢。</p><button id="back-home" class="primary-button">返回首页</button></div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true"><div class="modal-card"><h2 id="modal-title">确认操作</h2><p id="modal-message"></p><div class="modal-actions"><button id="modal-cancel" class="secondary-button">取消</button><button id="modal-confirm" class="danger-button">确认</button></div></div></div>
+  <script src="/ocr-parser.js"></script>
+  <script type="module" src="/vendor/paddleocr/runtime/paddle-ocr.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

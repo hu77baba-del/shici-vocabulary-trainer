@@ -1,0 +1,6 @@
+node_modules/
+data/app-data.json
+data/backups/
+样例/
+*.log
+.DS_Store
