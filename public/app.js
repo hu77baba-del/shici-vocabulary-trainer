@@ -12,7 +12,10 @@ const app = {
   retryFile: null,
   retryRotation: 0,
   retryObjectUrl: null,
-  toastTimer: null
+  toastTimer: null,
+  streakAnimationTimer: null,
+  lastRenderedStreak: null,
+  reviewSelection: new Set()
 };
 
 const statusLabels = { new: "未学习", learning: "学习中", review: "复习中", mastered: "已掌握" };
@@ -59,6 +62,7 @@ function go(view) {
   $(".sidebar").classList.remove("open");
   if (view === "home") renderHome();
   if (view === "library") renderLibrary();
+  if (view === "review") renderReviewPlanner();
   window.scrollTo(0, 0);
 }
 
@@ -67,15 +71,23 @@ function localDateKey(date = new Date()) {
 }
 
 function getDailyWords() {
-  if (!app.state) return { due: [], fresh: [] };
+  if (!app.state) return { due: [], fresh: [], allNew: [], plan: null };
   const today = app.state.today || localDateKey();
   const due = app.state.words.filter(word => word.status === "learning" || (word.status === "review" && word.nextDueDate <= today));
-  const fresh = app.state.words.filter(word => word.status === "new").slice(0, app.state.settings.dailyNewLimit || 10);
-  return { due, fresh };
+  const allNew = app.state.words.filter(word => word.status === "new");
+  const storedPlan = app.state.settings?.dailyNewPlan;
+  const plan = storedPlan?.date === today && Array.isArray(storedPlan.wordIds) ? storedPlan : null;
+  const fresh = plan
+    ? plan.wordIds.map(id => app.state.words.find(word => word.id === id)).filter(word => word?.status === "new")
+    : [];
+  return { due, fresh, allNew, plan };
 }
 
 function computeStreak() {
-  const days = new Set(app.state.reviews.filter(item => item.mode === "spelling" && item.correct).map(item => item.reviewedAt.slice(0, 10)));
+  const days = new Set(app.state.reviews.filter(item => {
+    if (item.source === "manual-free" || item.source === "manual-formal") return item.sessionCompleted === true;
+    return item.mode === "spelling" && item.correct;
+  }).map(item => item.reviewedAt.slice(0, 10)));
   let count = 0;
   const cursor = new Date();
   if (!days.has(localDateKey(cursor))) cursor.setDate(cursor.getDate() - 1);
@@ -83,22 +95,87 @@ function computeStreak() {
   return count;
 }
 
+function streakMessage(days) {
+  if (days === 0) return "今天完成学习，点亮第一颗星";
+  const milestoneMessages = new Map([
+    [1, "第一颗星已点亮"],
+    [3, "3 天小成就已解锁"],
+    [7, "一周星光已点亮"],
+    [14, "双周坚持已达成"],
+    [30, "30 天习惯徽章已解锁"]
+  ]);
+  if (milestoneMessages.has(days)) return milestoneMessages.get(days);
+  const nextMilestone = [3, 7, 14, 30].find(value => value > days);
+  return nextMilestone ? `再坚持 ${nextMilestone - days} 天，点亮新星` : "每一天都在为星光加码";
+}
+
+function renderStreak() {
+  const days = computeStreak();
+  const badge = $("#streak-badge");
+  const message = streakMessage(days);
+  $("#streak-count").textContent = days;
+  $("#streak-message").textContent = message;
+  badge.classList.toggle("has-streak", days > 0);
+  badge.setAttribute("aria-label", `已连续学习 ${days} 天。${message}`);
+  if (app.lastRenderedStreak !== null && days > app.lastRenderedStreak) {
+    badge.classList.remove("celebrate");
+    void badge.offsetWidth;
+    badge.classList.add("celebrate");
+    clearTimeout(app.streakAnimationTimer);
+    app.streakAnimationTimer = setTimeout(() => badge.classList.remove("celebrate"), 1250);
+  }
+  app.lastRenderedStreak = days;
+}
+
 function renderHome() {
   if (!app.state) return;
-  const { due, fresh } = getDailyWords();
+  const { due, fresh, allNew, plan } = getDailyWords();
   const date = new Date();
   $("#today-label").textContent = `${date.getMonth() + 1} 月 ${date.getDate()} 日 · ${["星期日","星期一","星期二","星期三","星期四","星期五","星期六"][date.getDay()]}`;
   $("#due-count").textContent = due.length;
-  $("#new-count").textContent = fresh.length;
+  $("#new-count").textContent = allNew.length;
   $("#mastered-count").textContent = app.state.words.filter(word => word.status === "mastered").length;
-  $("#streak-count").textContent = computeStreak();
+  renderStreak();
   const total = due.length + fresh.length;
-  $("#plan-summary").textContent = total ? `今天有 ${due.length} 个到期复习和 ${fresh.length} 个新单词，预计需要 ${Math.max(3, Math.ceil(total * 0.7))} 分钟。` : app.state.words.length ? "今天的计划已经完成，可以去词库里自由复习。" : "词库还是空的，先添加一些单词吧。";
-  $("#start-study").disabled = total === 0;
-  $("#start-study").textContent = total ? "开始学习 →" : "今日已完成";
+  const needsChoice = allNew.length > 0 && !plan;
+  if (!app.state.words.length) {
+    $("#plan-summary").textContent = "词库还是空的，先添加一些单词吧。";
+  } else if (needsChoice) {
+    $("#plan-summary").textContent = `今天有 ${due.length} 个到期复习。请先决定今天要学习几个新词，也可以选择 0。`;
+  } else if (total) {
+    $("#plan-summary").textContent = `今天有 ${due.length} 个到期复习和 ${fresh.length} 个计划新词，预计需要 ${Math.max(3, Math.ceil(total * 0.7))} 分钟。`;
+  } else {
+    $("#plan-summary").textContent = "今天的计划已经完成，可以去自主复习。";
+  }
+  const planControl = $("#daily-plan-control");
+  planControl.classList.toggle("hidden", !allNew.length);
+  if (!planControl.classList.contains("hidden")) {
+    const assigned = new Set(plan?.wordIds || []);
+    const maximum = (plan?.wordIds.length || 0) + allNew.filter(word => !assigned.has(word.id)).length;
+    $("#daily-new-count").max = String(maximum);
+    $("#daily-new-count").min = String(plan?.started ? plan.count : 0);
+    if (document.activeElement !== $("#daily-new-count")) $("#daily-new-count").value = plan ? String(plan.count) : "";
+    $("#daily-plan-hint").textContent = plan
+      ? plan.started ? `今天已安排 ${plan.count} 个，开始学习后只能继续增加。` : `今天已安排 ${plan.count} 个，开始前还可以调整。`
+      : `可选择 0 至 ${maximum} 个；当天会记住这次选择。`;
+    $("#save-daily-plan").textContent = plan ? "更新数量" : "确认数量";
+  }
+  $("#start-study").disabled = needsChoice || total === 0;
+  $("#start-study").textContent = needsChoice ? "先选择新词数量" : total ? "开始学习 →" : "今日已完成";
   const trouble = [...app.state.words].filter(word => word.failureCount > 0).sort((a, b) => b.failureCount - a.failureCount).slice(0, 4);
   $("#trouble-list").classList.toggle("empty-state", !trouble.length);
   $("#trouble-list").innerHTML = trouble.length ? trouble.map(word => `<div class="mini-word"><strong>${escapeHtml(word.spelling)}</strong><span>${escapeHtml(word.meaning)} · 错 ${word.failureCount} 次</span></div>`).join("") : "还没有错词记录";
+}
+
+async function saveDailyPlan() {
+  const value = Number($("#daily-new-count").value);
+  if (!Number.isInteger(value) || value < 0) return toast("请输入 0 或正整数");
+  try {
+    const data = await request("/api/settings/daily-new-plan", { method: "PUT", body: JSON.stringify({ count: value }) });
+    app.state = data.state;
+    renderHome();
+    toast(`今天安排学习 ${value} 个新词`);
+  } catch (error) { toast(error.message); }
 }
 
 function escapeHtml(text) {
@@ -309,6 +386,104 @@ function renderLibrary() {
   $("#library-empty").classList.toggle("hidden", words.length > 0);
 }
 
+function learnedWords() {
+  return app.state ? app.state.words.filter(word => word.status !== "new") : [];
+}
+
+function reviewPool(kind) {
+  const words = learnedWords();
+  if (kind === "trouble") return words.filter(word => word.failureCount > 0).sort((a, b) => b.failureCount - a.failureCount || a.spelling.localeCompare(b.spelling));
+  if (kind === "mastered") return words.filter(word => word.status === "mastered");
+  return words;
+}
+
+function shuffled(words) {
+  const copy = [...words];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [copy[index], copy[swap]] = [copy[swap], copy[index]];
+  }
+  return copy;
+}
+
+function syncReviewMode() {
+  const formal = $("#review-kind").value === "manual-formal";
+  if (formal) $("#review-activity").value = "spelling";
+  $("#review-activity option[value='recognition']").disabled = formal;
+  $("#review-kind-hint").textContent = formal
+    ? "答题结果会推进或重置正式复习阶段。"
+    : "答错会计入易错统计，但不会改变原来的复习计划。";
+  $("#review-activity-hint").textContent = formal
+    ? "正式复习使用拼写检测，答错词会在本轮自动回来。"
+    : $("#review-activity").value === "recognition"
+      ? "先看英文回想释义，再选择“认识”或“不认识”。"
+      : "听发音、看中文完成拼写，答错词会在本轮自动回来。";
+}
+
+function filteredReviewWords() {
+  const query = $("#review-search").value.trim().toLocaleLowerCase();
+  const status = $("#review-status-filter").value;
+  return learnedWords().filter(word => (status === "all" || word.status === status)
+    && (!query || word.spelling.toLocaleLowerCase().includes(query) || word.meaning.includes(query)));
+}
+
+function renderReviewWords() {
+  const words = filteredReviewWords();
+  const eligibleIds = new Set(learnedWords().map(word => word.id));
+  app.reviewSelection = new Set([...app.reviewSelection].filter(id => eligibleIds.has(id)));
+  $("#review-word-body").innerHTML = words.map(word => `<tr data-id="${word.id}"><td><input class="review-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.reviewSelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong></td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.failureCount}</td></tr>`).join("");
+  $("#review-empty").classList.toggle("hidden", words.length > 0);
+  $("#review-select-all").checked = words.length > 0 && words.every(word => app.reviewSelection.has(word.id));
+  $("#review-select-all").indeterminate = words.some(word => app.reviewSelection.has(word.id)) && !words.every(word => app.reviewSelection.has(word.id));
+  $("#start-selected-review").disabled = app.reviewSelection.size === 0;
+  $("#start-selected-review").textContent = `复习已选 ${app.reviewSelection.size} 个`;
+}
+
+function renderReviewAuto() {
+  const kind = $("#review-pool").value;
+  const pool = reviewPool(kind);
+  $("#review-eligible-count").textContent = `${learnedWords().length} 个可复习`;
+  $("#review-count").max = String(pool.length);
+  $("#review-auto-hint").textContent = pool.length ? `当前范围共有 ${pool.length} 个单词，请输入 1 至 ${pool.length}。` : "当前范围还没有可复习的单词。";
+  $("#start-auto-review").disabled = pool.length === 0;
+}
+
+function renderReviewPlanner() {
+  if (!app.state) return;
+  syncReviewMode();
+  renderReviewAuto();
+  renderReviewWords();
+}
+
+function startManualReview(words) {
+  const eligible = words.filter(word => word?.status !== "new");
+  if (!eligible.length) return toast("请选择至少一个已经学习过的单词");
+  const source = $("#review-kind").value;
+  const activity = source === "manual-formal" ? "spelling" : $("#review-activity").value;
+  app.study = {
+    sessionId: crypto.randomUUID(), source, activity, manual: true, fresh: [], tasks: eligible,
+    familiarIndex: 0, recognitionIndex: 0, queue: eligible.map(word => word.id), completed: 0,
+    total: eligible.length, failed: new Set(), streaks: new Map(), currentId: null,
+    feedbackLocked: false, correctAttempts: 0, wrongAttempts: 0
+  };
+  go("study");
+  if (activity === "recognition") showNextRecognition(); else beginSpelling();
+}
+
+function startAutoReview() {
+  const pool = reviewPool($("#review-pool").value);
+  const count = Number($("#review-count").value);
+  if (!Number.isInteger(count) || count < 1 || count > pool.length) return toast(`请输入 1 至 ${pool.length} 的整数`);
+  const words = $("#review-pool").value === "trouble" ? pool.slice(0, count) : shuffled(pool).slice(0, count);
+  startManualReview(words);
+}
+
+function startSelectedReview() {
+  const words = [...app.reviewSelection].map(id => app.state.words.find(word => word.id === id)).filter(Boolean);
+  if (words.length) app.reviewSelection.clear();
+  startManualReview(words);
+}
+
 async function editWord(id) {
   const word = app.state.words.find(item => item.id === id);
   if (!word) return;
@@ -335,24 +510,24 @@ async function deleteWord(id) {
   app.state = data.state; renderLibrary(); toast("词条已删除");
 }
 
-function startStudy() {
-  const { due, fresh } = getDailyWords();
-  const tasks = [...due, ...fresh];
+async function startStudy() {
+  let daily = getDailyWords();
+  if (daily.allNew.length && !daily.plan) return toast("请先选择今天的新词数量");
+  try {
+    if (daily.plan && !daily.plan.started) {
+      const data = await request("/api/settings/daily-new-plan/start", { method: "POST", body: "{}" });
+      app.state = data.state;
+      daily = getDailyWords();
+    }
+  } catch (error) { return toast(error.message); }
+  const { due, fresh } = daily;
+  const tasks = [...new Map([...due, ...fresh].map(word => [word.id, word])).values()];
   if (!tasks.length) return;
   app.study = {
-    sessionId: crypto.randomUUID(),
-    fresh,
-    tasks,
-    familiarIndex: 0,
-    queue: tasks.map(word => word.id),
-    completed: 0,
-    total: tasks.length,
-    failed: new Set(),
-    streaks: new Map(),
-    currentId: null,
-    feedbackLocked: false,
-    correctAttempts: 0,
-    wrongAttempts: 0
+    sessionId: crypto.randomUUID(), source: "scheduled", activity: "spelling", manual: false,
+    fresh, tasks, familiarIndex: 0, recognitionIndex: 0, queue: tasks.map(word => word.id),
+    completed: 0, total: tasks.length, failed: new Set(), streaks: new Map(), currentId: null,
+    feedbackLocked: false, correctAttempts: 0, wrongAttempts: 0
   };
   go("study");
   if (fresh.length) showFamiliarize(); else beginSpelling();
@@ -371,6 +546,7 @@ function showFamiliarize() {
   $("#study-complete").classList.add("hidden");
   $("#familiarize-card").classList.remove("hidden");
   $("#spelling-card").classList.add("hidden");
+  $("#recognition-card").classList.add("hidden");
   study.currentId = word.id;
   $("#familiar-word").textContent = word.spelling;
   $("#familiar-meaning").textContent = word.meaning;
@@ -379,13 +555,54 @@ function showFamiliarize() {
 }
 
 function beginSpelling() {
+  $("#study-card").classList.remove("hidden");
+  $("#study-complete").classList.add("hidden");
   $("#familiarize-card").classList.add("hidden");
+  $("#recognition-card").classList.add("hidden");
   $("#spelling-card").classList.remove("hidden");
   showNextSpelling();
 }
 
 function currentWord() {
   return app.state.words.find(word => word.id === app.study.currentId);
+}
+
+function showNextRecognition() {
+  const study = app.study;
+  if (study.recognitionIndex >= study.tasks.length) return finishStudy();
+  const word = study.tasks[study.recognitionIndex];
+  study.currentId = word.id;
+  $("#study-card").classList.remove("hidden");
+  $("#study-complete").classList.add("hidden");
+  $("#familiarize-card").classList.add("hidden");
+  $("#spelling-card").classList.add("hidden");
+  $("#recognition-card").classList.remove("hidden");
+  $("#recognition-word").textContent = word.spelling;
+  $("#recognition-meaning").textContent = word.meaning;
+  $("#recognition-answer").classList.add("hidden");
+  $("#reveal-recognition").classList.remove("hidden");
+  updateStudyProgress("自主认读", study.recognitionIndex + 1, study.total);
+  setTimeout(() => speak(word.spelling), 180);
+}
+
+async function gradeRecognition(correct) {
+  const study = app.study;
+  const word = currentWord();
+  const sessionCompleted = study.recognitionIndex === study.tasks.length - 1;
+  try {
+    const data = await request("/api/attempts", {
+      method: "POST",
+      body: JSON.stringify({
+        wordId: word.id, sessionId: study.sessionId, source: "manual-free", mode: "recognition",
+        answer: correct ? "认识" : "不认识", correct, completedRound: true, sessionCompleted
+      })
+    });
+    app.state = data.state;
+  } catch (error) { return toast(error.message); }
+  study.completed += 1;
+  if (correct) study.correctAttempts += 1; else study.wrongAttempts += 1;
+  study.recognitionIndex += 1;
+  showNextRecognition();
 }
 
 function showNextSpelling() {
@@ -399,7 +616,7 @@ function showNextSpelling() {
   $("#spelling-input").disabled = false;
   $("#answer-feedback").className = "answer-feedback hidden";
   $("#submit-spelling").textContent = "提交答案";
-  updateStudyProgress("拼写练习", study.completed + 1, study.total);
+  updateStudyProgress(study.manual ? "自主拼写" : "拼写练习", study.completed + 1, study.total);
   $("#spelling-input").focus();
   speak(word.spelling);
 }
@@ -435,8 +652,12 @@ async function submitSpelling(event) {
     study.correctAttempts += 1;
     study.completed += 1;
   }
+  const sessionCompleted = study.manual && completedRound && study.queue.length === 0;
   try {
-    const data = await request("/api/attempts", { method: "POST", body: JSON.stringify({ wordId: word.id, sessionId: study.sessionId, mode: "spelling", answer, correct, completedRound }) });
+    const data = await request("/api/attempts", { method: "POST", body: JSON.stringify({
+      wordId: word.id, sessionId: study.sessionId, source: study.source, mode: "spelling",
+      answer, correct, completedRound, sessionCompleted
+    }) });
     app.state = data.state;
   } catch (error) {
     if (!correct || !completedRound) study.queue.unshift(word.id);
@@ -459,8 +680,10 @@ async function submitSpelling(event) {
 function finishStudy() {
   $("#study-card").classList.add("hidden");
   $("#study-complete").classList.remove("hidden");
-  $("#complete-summary").textContent = `完成 ${app.study.total} 个单词，答对 ${app.study.correctAttempts} 次，纠正 ${app.study.wrongAttempts} 次。明天记得回来复习。`;
-  updateStudyProgress("今日完成", app.study.total, app.study.total);
+  $("#complete-summary").textContent = app.study.manual
+    ? `完成 ${app.study.total} 个单词的自主复习，记住或答对 ${app.study.correctAttempts} 次，纠正 ${app.study.wrongAttempts} 次。`
+    : `完成 ${app.study.total} 个单词，答对 ${app.study.correctAttempts} 次，纠正 ${app.study.wrongAttempts} 次。明天记得回来复习。`;
+  updateStudyProgress(app.study.manual ? "自主复习完成" : "今日完成", app.study.total, app.study.total);
 }
 
 async function restoreBackup(file) {
@@ -477,11 +700,36 @@ function bindEvents() {
   $$('[data-go]').forEach(button => button.addEventListener("click", () => go(button.dataset.go)));
   $("#mobile-menu").addEventListener("click", () => $(".sidebar").classList.toggle("open"));
   $("#start-study").addEventListener("click", startStudy);
+  $("#save-daily-plan").addEventListener("click", saveDailyPlan);
   $("#library-add").addEventListener("click", () => go("import"));
-  $$(".tab").forEach(tab => tab.addEventListener("click", () => {
-    $$(".tab").forEach(node => node.classList.toggle("active", node === tab));
+  $$('[data-import-mode]').forEach(tab => tab.addEventListener("click", () => {
+    $$('[data-import-mode]').forEach(node => node.classList.toggle("active", node === tab));
     $$(".import-mode").forEach(node => node.classList.toggle("active", node.id === `${tab.dataset.importMode}-import`));
   }));
+  $$('[data-review-pick]').forEach(tab => tab.addEventListener("click", () => {
+    $$('[data-review-pick]').forEach(node => node.classList.toggle("active", node === tab));
+    $$(".review-picker").forEach(node => node.classList.toggle("active", node.id === `review-${tab.dataset.reviewPick}`));
+  }));
+  $("#review-kind").addEventListener("change", syncReviewMode);
+  $("#review-activity").addEventListener("change", syncReviewMode);
+  $("#review-pool").addEventListener("change", renderReviewAuto);
+  $("#start-auto-review").addEventListener("click", startAutoReview);
+  $("#start-selected-review").addEventListener("click", startSelectedReview);
+  $("#review-search").addEventListener("input", renderReviewWords);
+  $("#review-status-filter").addEventListener("change", renderReviewWords);
+  $("#review-select-all").addEventListener("change", event => {
+    for (const word of filteredReviewWords()) {
+      if (event.target.checked) app.reviewSelection.add(word.id); else app.reviewSelection.delete(word.id);
+    }
+    renderReviewWords();
+  });
+  $("#review-word-body").addEventListener("change", event => {
+    const checkbox = event.target.closest(".review-word-check");
+    if (!checkbox) return;
+    const id = checkbox.closest("tr").dataset.id;
+    if (checkbox.checked) app.reviewSelection.add(id); else app.reviewSelection.delete(id);
+    renderReviewWords();
+  });
   const drop = $("#drop-zone");
   drop.addEventListener("dragover", event => { event.preventDefault(); drop.classList.add("dragging"); });
   drop.addEventListener("dragleave", () => drop.classList.remove("dragging"));
@@ -519,7 +767,14 @@ function bindEvents() {
   $$('[data-speak-current]').forEach(button => button.addEventListener("click", () => { const word = currentWord(); if (word) speak(word.spelling); }));
   $("#next-familiar").addEventListener("click", () => { app.study.familiarIndex += 1; if (app.study.familiarIndex < app.study.fresh.length) showFamiliarize(); else beginSpelling(); });
   $("#spelling-card").addEventListener("submit", submitSpelling);
-  $("#leave-study").addEventListener("click", async () => { if (await confirmAction("暂时退出学习？", "已经提交的答题结果会保留，未完成的单词下次会重新安排。", "退出")) go("home"); });
+  $("#reveal-recognition").addEventListener("click", () => { $("#reveal-recognition").classList.add("hidden"); $("#recognition-answer").classList.remove("hidden"); });
+  $("#recognition-remembered").addEventListener("click", () => gradeRecognition(true));
+  $("#recognition-forgot").addEventListener("click", () => gradeRecognition(false));
+  $("#leave-study").addEventListener("click", async () => {
+    const manual = app.study?.manual;
+    const message = manual ? "已经提交的练习结果会保留，本次未完成的内容不会计入连续学习。" : "已经提交的答题结果会保留，未完成的单词下次会重新安排。";
+    if (await confirmAction("暂时退出学习？", message, "退出")) go(manual ? "review" : "home");
+  });
   $("#back-home").addEventListener("click", () => go("home"));
   $("#restore-input").addEventListener("change", event => { if (event.target.files[0]) restoreBackup(event.target.files[0]); event.target.value = ""; });
   $("#shutdown").addEventListener("click", async () => {

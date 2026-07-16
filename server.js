@@ -8,9 +8,9 @@ const { exec } = require("node:child_process");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
-const DATA_DIR = path.join(ROOT, "data");
-const DATA_FILE = path.join(DATA_DIR, "app-data.json");
-const BACKUP_DIR = path.join(DATA_DIR, "backups");
+const DATA_FILE = process.env.DATA_FILE ? path.resolve(process.env.DATA_FILE) : path.join(ROOT, "data", "app-data.json");
+const DATA_DIR = path.dirname(DATA_FILE);
+const BACKUP_DIR = process.env.BACKUP_DIR ? path.resolve(process.env.BACKUP_DIR) : path.join(DATA_DIR, "backups");
 const PORT_START = Number(process.env.PORT) || 4173;
 const MAX_BODY = 12 * 1024 * 1024;
 const REVIEW_DELAYS = [1, 3, 7, 14, 30];
@@ -31,7 +31,7 @@ const MIME = {
 };
 
 function emptyStore() {
-  return { version: 1, words: [], reviews: [], settings: { dailyNewLimit: 10 } };
+  return { version: 1, words: [], reviews: [], settings: {} };
 }
 
 function ensureData() {
@@ -45,7 +45,7 @@ function readStore() {
   if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.words) || !Array.isArray(parsed.reviews)) {
     throw new Error("数据文件结构无效");
   }
-  parsed.settings ||= { dailyNewLimit: 10 };
+  parsed.settings = parsed.settings && typeof parsed.settings === "object" ? parsed.settings : {};
   return parsed;
 }
 
@@ -80,6 +80,31 @@ function normalizeWord(raw) {
   if (!spelling || !meaning) throw new Error("英文和中文释义不能为空");
   if (!/^[A-Za-z][A-Za-z\s'’.-]*$/.test(spelling)) throw new Error(`英文格式不正确：${spelling}`);
   return { spelling, meaning };
+}
+
+function activeDailyPlan(store) {
+  const plan = store.settings?.dailyNewPlan;
+  if (!plan || plan.date !== dateKey() || !Array.isArray(plan.wordIds)) return null;
+  const existingIds = new Set(store.words.map(word => word.id));
+  const wordIds = [...new Set(plan.wordIds)].filter(id => existingIds.has(id));
+  return { date: plan.date, count: wordIds.length, wordIds, started: plan.started === true };
+}
+
+function saveDailyPlan(store, count) {
+  if (!Number.isInteger(count) || count < 0) throw new Error("每日新词数量必须是 0 或正整数");
+  const current = activeDailyPlan(store) || { date: dateKey(), count: 0, wordIds: [], started: false };
+  if (current.started && count < current.count) throw new Error("今天已经开始学习，只能增加新词数量");
+  const assigned = new Set(current.wordIds);
+  const available = store.words.filter(word => word.status === "new" && !assigned.has(word.id));
+  const maximum = current.wordIds.length + available.length;
+  if (count > maximum) throw new Error(`当前最多可以安排 ${maximum} 个新词`);
+  const wordIds = count <= current.wordIds.length
+    ? current.wordIds.slice(0, count)
+    : [...current.wordIds, ...available.slice(0, count - current.wordIds.length).map(word => word.id)];
+  const plan = { date: dateKey(), count: wordIds.length, wordIds, started: current.started };
+  store.settings ||= {};
+  store.settings.dailyNewPlan = plan;
+  return plan;
 }
 
 function publicState(store) {
@@ -142,6 +167,22 @@ async function api(req, res, url) {
     return send(res, 200, publicState(store));
   }
 
+  if (req.method === "PUT" && url.pathname === "/api/settings/daily-new-plan") {
+    const body = await readBody(req);
+    const plan = saveDailyPlan(store, body.count);
+    atomicWrite(store);
+    return send(res, 200, { plan, state: publicState(store) });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/settings/daily-new-plan/start") {
+    const plan = activeDailyPlan(store);
+    if (!plan) throw new Error("请先选择今天的新词数量");
+    plan.started = true;
+    store.settings.dailyNewPlan = plan;
+    atomicWrite(store);
+    return send(res, 200, { plan, state: publicState(store) });
+  }
+
   if (req.method === "POST" && url.pathname === "/api/words/import") {
     const body = await readBody(req);
     if (!Array.isArray(body.words) || !body.words.length || body.words.length > 500) throw new Error("请选择 1 至 500 个词条");
@@ -173,6 +214,12 @@ async function api(req, res, url) {
     if (index < 0) return send(res, 404, { error: "没有找到该词条" });
     store.words.splice(index, 1);
     store.reviews = store.reviews.filter(record => record.wordId !== wordMatch[1]);
+    const plan = activeDailyPlan(store);
+    if (plan?.wordIds.includes(wordMatch[1])) {
+      plan.wordIds = plan.wordIds.filter(id => id !== wordMatch[1]);
+      plan.count = plan.wordIds.length;
+      store.settings.dailyNewPlan = plan;
+    }
     atomicWrite(store);
     return send(res, 200, { state: publicState(store) });
   }
@@ -189,10 +236,17 @@ async function api(req, res, url) {
     const body = await readBody(req);
     const word = store.words.find(item => item.id === cleanText(body.wordId, 80));
     if (!word) return send(res, 404, { error: "没有找到该词条" });
+    const sources = new Set(["scheduled", "manual-free", "manual-formal"]);
+    const source = sources.has(body.source) ? body.source : "scheduled";
+    const mode = body.mode === "recognition" ? "recognition" : body.mode === "spelling" ? "spelling" : "familiarize";
+    if (source.startsWith("manual-") && word.status === "new") throw new Error("未学习的新词不能进入自主复习");
+    if (source === "manual-formal" && mode !== "spelling") throw new Error("正式复习只支持拼写练习");
     const correct = body.correct === true;
     const completedRound = body.completedRound === true;
     const before = word.reviewStep;
-    if (!correct) {
+    if (source === "manual-free") {
+      if (!correct) word.failureCount += 1;
+    } else if (!correct) {
       word.failureCount += 1;
       word.status = "learning";
       word.reviewStep = -1;
@@ -210,8 +264,9 @@ async function api(req, res, url) {
     word.updatedAt = new Date().toISOString();
     store.reviews.push({
       id: crypto.randomUUID(), wordId: word.id, sessionId: cleanText(body.sessionId, 80),
-      mode: body.mode === "spelling" ? "spelling" : "familiarize", answer: cleanText(body.answer, 150),
-      correct, completedRound, reviewedAt: new Date().toISOString(), stepBefore: before, stepAfter: word.reviewStep
+      source, mode, answer: cleanText(body.answer, 150), correct, completedRound,
+      sessionCompleted: body.sessionCompleted === true, reviewedAt: new Date().toISOString(),
+      stepBefore: before, stepAfter: word.reviewStep
     });
     if (store.reviews.length > 10000) store.reviews = store.reviews.slice(-10000);
     atomicWrite(store);
@@ -231,7 +286,7 @@ async function api(req, res, url) {
     if (!body || body.version !== 1 || !Array.isArray(body.words) || !Array.isArray(body.reviews)) throw new Error("备份文件结构无效");
     for (const word of body.words) normalizeWord(word);
     backupStore(store);
-    atomicWrite({ version: 1, words: body.words, reviews: body.reviews, settings: body.settings || { dailyNewLimit: 10 } });
+    atomicWrite({ version: 1, words: body.words, reviews: body.reviews, settings: body.settings && typeof body.settings === "object" ? body.settings : {} });
     return send(res, 200, { state: publicState(readStore()) });
   }
 
