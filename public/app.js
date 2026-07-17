@@ -16,7 +16,10 @@ const app = {
   streakAnimationTimer: null,
   lastRenderedStreak: null,
   librarySelection: new Set(),
-  reviewSelection: new Set()
+  reviewSelection: new Set(),
+  historyOffset: 0,
+  historyTotal: 0,
+  currentReport: null
 };
 
 const statusLabels = { new: "未学习", learning: "学习中", review: "复习中", mastered: "已掌握" };
@@ -64,6 +67,7 @@ function go(view) {
   if (view === "home") renderHome();
   if (view === "library") renderLibrary();
   if (view === "review") renderReviewPlanner();
+  if (view === "growth") renderGrowth();
   window.scrollTo(0, 0);
 }
 
@@ -85,6 +89,7 @@ function getDailyWords() {
 }
 
 function computeStreak() {
+  if (app.state?.achievement) return app.state.achievement.streak;
   const days = new Set(app.state.reviews.filter(item => {
     if (item.source === "manual-free" || item.source === "manual-formal") return item.sessionCompleted === true;
     return item.mode === "spelling" && item.correct;
@@ -112,12 +117,18 @@ function streakMessage(days) {
 
 function renderStreak() {
   const days = computeStreak();
+  const growth = app.state.achievement;
   const badge = $("#streak-badge");
-  const message = streakMessage(days);
+  const message = `连续学习 ${days} 天`;
   $("#streak-count").textContent = days;
-  $("#streak-message").textContent = message;
+  $("#streak-message").firstChild.textContent = "连续学习 ";
+  if (growth) {
+    $("#home-level-name").textContent = `等级 ${growth.level.level} · ${growth.level.name}`;
+    $("#home-starlight").textContent = growth.starlight;
+    $("#home-level-progress").style.width = `${Math.round(growth.level.progress * 100)}%`;
+  }
   badge.classList.toggle("has-streak", days > 0);
-  badge.setAttribute("aria-label", `已连续学习 ${days} 天。${message}`);
+  badge.setAttribute("aria-label", `${growth ? `${growth.level.name}，${growth.starlight} 星光值。` : ""}${message}。打开星光成长册`);
   if (app.lastRenderedStreak !== null && days > app.lastRenderedStreak) {
     badge.classList.remove("celebrate");
     void badge.offsetWidth;
@@ -161,11 +172,128 @@ function renderHome() {
       : `可选择 0 至 ${maximum} 个；当天会记住这次选择。`;
     $("#save-daily-plan").textContent = plan ? "更新数量" : "确认数量";
   }
-  $("#start-study").disabled = needsChoice || total === 0;
-  $("#start-study").textContent = needsChoice ? "先选择新词数量" : total ? "开始学习 →" : "今日已完成";
+  const active = app.state.activeSession;
+  $("#start-study").disabled = !active && (needsChoice || total === 0);
+  $("#start-study").textContent = active ? "继续上次学习 →" : needsChoice ? "先选择新词数量" : total ? "开始学习 →" : "今日已完成";
   const trouble = [...app.state.words].filter(word => word.failureCount > 0).sort((a, b) => b.failureCount - a.failureCount).slice(0, 4);
   $("#trouble-list").classList.toggle("empty-state", !trouble.length);
   $("#trouble-list").innerHTML = trouble.length ? trouble.map(word => `<div class="mini-word"><strong>${escapeHtml(word.spelling)}</strong><span>${escapeHtml(word.meaning)} · 错 ${word.failureCount} 次</span></div>`).join("") : "还没有错词记录";
+}
+
+function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(value.length === 10 ? `${value}T12:00:00` : value);
+  return Number.isNaN(date.getTime()) ? value : `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function renderGrowth() {
+  const growth = app.state?.achievement;
+  if (!growth) return;
+  $("#growth-level-number").textContent = `等级 ${growth.level.level}`;
+  $("#growth-level-name").textContent = growth.level.name;
+  $("#growth-starlight").textContent = growth.starlight;
+  $("#growth-streak").textContent = growth.streak;
+  $("#growth-level-progress").style.width = `${Math.round(growth.level.progress * 100)}%`;
+  $("#growth-level-hint").textContent = growth.level.next ? `距离“${growth.level.next.name}”还差 ${growth.level.remaining} 星光值` : "已经达到最高等级，星光仍会继续积累";
+  const unlocked = growth.badges.filter(item => item.unlockedAt).length;
+  $("#badge-count").textContent = `${unlocked} / ${growth.badges.length}`;
+  const groups = new Map();
+  for (const badge of growth.badges) {
+    if (!groups.has(badge.group)) groups.set(badge.group, []);
+    groups.get(badge.group).push(badge);
+  }
+  $("#badge-groups").innerHTML = [...groups].map(([group, badges]) => `<section class="badge-group"><h3>${escapeHtml(group)}</h3><div class="badge-grid">${badges.map(badge => `<article class="badge-card ${badge.unlockedAt ? "unlocked" : "locked"}"><div class="badge-icon" aria-hidden="true">★</div><div><strong>${escapeHtml(badge.name)}</strong><p>${escapeHtml(badge.description)}</p>${badge.unlockedAt ? `<small>${badge.retroactive ? "升级补发 · " : ""}${formatDate(badge.unlockedAt)}</small>` : `<small>${badge.progress} / ${badge.target}</small>`}</div></article>`).join("")}</div></section>`).join("");
+  if (!$("#session-history").dataset.loaded) {
+    app.historyOffset = app.state.recentSessions.length;
+    app.historyTotal = app.state.sessionTotal ?? app.state.recentSessions.length;
+    renderSessionHistory(app.state.recentSessions, false);
+  }
+}
+
+function renderSessionHistory(sessions, append) {
+  const container = $("#session-history");
+  if (!append) container.innerHTML = "";
+  if (!sessions.length && !append) container.innerHTML = '<div class="empty-state">完成一场学习后，记录会出现在这里。</div>';
+  container.insertAdjacentHTML("beforeend", sessions.map(session => `<button class="session-row" type="button" data-session-id="${session.id}"><span><strong>${escapeHtml(session.title)}</strong><small>${formatDate(session.completedAt)} · ${session.totalWords} 个词条</small></span><span><b>+${session.starlightEarned}</b> 星光 ›</span></button>`).join(""));
+  container.dataset.loaded = "true";
+  $("#load-more-sessions").classList.toggle("hidden", app.historyOffset >= app.historyTotal);
+}
+
+async function loadMoreSessions() {
+  try {
+    const data = await request(`/api/study-sessions?offset=${app.historyOffset}&limit=10`);
+    app.historyTotal = data.total;
+    app.historyOffset = data.nextOffset ?? data.total;
+    renderSessionHistory(data.sessions, true);
+  } catch (error) { toast(error.message); }
+}
+
+function wordListHtml(words, hiddenCount = false) {
+  if (!words?.length) return "";
+  const visible = words.slice(0, 5);
+  const rest = words.slice(5);
+  return `<div class="report-word-list">${visible.map(word => `<div><strong>${escapeHtml(word.spelling)}</strong>${word.partOfSpeech ? `<span>${escapeHtml(formatPartOfSpeech(word.partOfSpeech))}</span>` : ""}<p>${escapeHtml(word.meaning)}</p></div>`).join("")}${rest.length ? `<div class="report-extra hidden">${rest.map(word => `<div><strong>${escapeHtml(word.spelling)}</strong>${word.partOfSpeech ? `<span>${escapeHtml(formatPartOfSpeech(word.partOfSpeech))}</span>` : ""}<p>${escapeHtml(word.meaning)}</p></div>`).join("")}</div><button class="text-button report-expand" type="button">查看其余 ${rest.length} 条</button>` : ""}</div>`;
+}
+
+function showCompletionReport(report, historical = false) {
+  if (!report) return;
+  app.currentReport = report;
+  go("study");
+  $("#study-card").classList.add("hidden");
+  $("#study-complete").classList.remove("hidden");
+  $("#study-complete").classList.toggle("celebrate", !historical && (report.levelAfter > report.levelBefore || report.newBadgeIds.length));
+  $("#report-title").textContent = report.title;
+  const correctedCount = report.correctedWords?.length || 0;
+  $("#complete-summary").textContent = correctedCount ? `今天认真纠正了 ${correctedCount} 个词。` : "本轮顺利完成，每一次认真回想都在让记忆更牢。";
+  const mainClass = report.source === "scheduled"
+    ? [["完成词条", report.totalWords], ["新学词", report.newWords], ["到期复习", report.dueWords]]
+    : [["自主练习", report.practiceWords], ["其中到期", report.dueWords]];
+  $("#report-stats").classList.toggle("two", report.source !== "scheduled");
+  $("#report-stats").innerHTML = mainClass.map(([label, value]) => `<div><small>${label}</small><strong>${value}</strong></div>`).join("");
+  const level = report.levelSummary || app.state.achievement.level;
+  const levelHint = level.next
+    ? `距离“${escapeHtml(level.next.name)}”还差 ${level.remaining} 星光值`
+    : "已达到最高等级，星光仍会继续积累";
+  $("#report-meta").innerHTML = `<div><small>下一次最早复习</small><strong>${report.nextReviewDate ? formatDate(report.nextReviewDate) : "暂无"}</strong></div><div><small>完成时等级进度</small><strong>等级 ${level.level} · ${escapeHtml(level.name)}</strong><span>${report.starlightAfter ?? app.state.achievement.starlight} 星光值 · ${levelHint}</span></div>`;
+  const corrected = $("#report-corrected");
+  corrected.classList.toggle("hidden", !correctedCount);
+  corrected.innerHTML = correctedCount ? `<h2>今天纠正了这些词</h2>${wordListHtml(report.correctedWords)}` : "";
+  const continuing = $("#report-continue");
+  continuing.classList.toggle("hidden", !report.continueWords?.length);
+  continuing.innerHTML = report.continueWords?.length ? `<h2>接下来继续巩固</h2>${wordListHtml(report.continueWords)}` : "";
+  $("#report-rewards").innerHTML = report.rewardDetails?.length
+    ? `<h2>本次获得 ${report.starlightEarned} 星光值</h2>${report.rewardDetails.map(item => `<p><span>★ +${item.points}</span>${escapeHtml(item.reason)}</p>`).join("")}`
+    : `<p class="free-note">本次练习已记录，不改变正式复习日期，也不增加星光值。</p>`;
+  const badgeMap = new Map(app.state.achievement.badges.map(item => [item.id, item]));
+  const reportBadges = $("#report-badges");
+  reportBadges.classList.toggle("hidden", !report.newBadgeIds?.length);
+  reportBadges.innerHTML = report.newBadgeIds?.length ? `<h2>新解锁勋章</h2><div>${report.newBadgeIds.map(id => `<span>★ ${escapeHtml(badgeMap.get(id)?.name || id)}</span>`).join("")}</div>` : "";
+  $("#report-growth").classList.toggle("hidden", historical);
+  updateStudyProgress("学习完成", report.totalWords, report.totalWords);
+}
+
+async function openHistoricalReport(id) {
+  try {
+    const data = await request(`/api/study-sessions/${id}`);
+    showCompletionReport(data.report, true);
+  } catch (error) { toast(error.message); }
+}
+
+async function acknowledgeCurrentReport(destination) {
+  const report = app.currentReport;
+  if (report && !report.acknowledgedAt) {
+    try {
+      const data = await request(`/api/study-sessions/${report.id}/acknowledge`, { method: "POST", body: "{}" });
+      app.state = data.state;
+      report.acknowledgedAt = data.report.acknowledgedAt;
+    } catch (error) { return toast(error.message); }
+  }
+  app.currentReport = null;
+  if (destination === "growth") {
+    $("#session-history").dataset.loaded = "";
+    app.historyOffset = 0;
+  }
+  go(destination);
 }
 
 async function saveDailyPlan() {
@@ -528,19 +656,12 @@ function renderReviewPlanner() {
   renderReviewWords();
 }
 
-function startManualReview(words) {
+async function startManualReview(words) {
   const eligible = words.filter(word => word?.status !== "new");
   if (!eligible.length) return toast("请选择至少一个已经学习过的单词");
   const source = $("#review-kind").value;
   const activity = source === "manual-formal" ? "spelling" : $("#review-activity").value;
-  app.study = {
-    sessionId: crypto.randomUUID(), source, activity, manual: true, fresh: [], tasks: eligible,
-    familiarIndex: 0, recognitionIndex: 0, queue: eligible.map(word => word.id), completed: 0,
-    total: eligible.length, failed: new Set(), streaks: new Map(), currentId: null,
-    feedbackLocked: false, correctAttempts: 0, wrongAttempts: 0
-  };
-  go("study");
-  if (activity === "recognition") showNextRecognition(); else beginSpelling();
+  await startServerSession({ source, mode: activity, wordIds: eligible.map(word => word.id) });
 }
 
 function startAutoReview() {
@@ -601,26 +722,32 @@ async function deleteSelectedWords() {
 }
 
 async function startStudy() {
-  let daily = getDailyWords();
+  if (app.state.activeSession) return resumeActiveSession();
+  const daily = getDailyWords();
   if (daily.allNew.length && !daily.plan) return toast("请先选择今天的新词数量");
+  await startServerSession({ source: "scheduled", mode: "spelling" });
+}
+
+async function startServerSession(payload) {
   try {
-    if (daily.plan && !daily.plan.started) {
-      const data = await request("/api/settings/daily-new-plan/start", { method: "POST", body: "{}" });
-      app.state = data.state;
-      daily = getDailyWords();
+    if (app.state.activeSession) {
+      const endOld = await confirmAction("已有一场学习暂停中", "可以继续原场次，也可以结束原场次后开始新的学习。", "结束并开始新的");
+      if (!endOld) return resumeActiveSession();
+      const ended = await request(`/api/study-sessions/${app.state.activeSession.id}/abandon`, { method: "POST", body: "{}" });
+      app.state = ended.state;
     }
-  } catch (error) { return toast(error.message); }
-  const { due, fresh } = daily;
-  const tasks = [...new Map([...due, ...fresh].map(word => [word.id, word])).values()];
-  if (!tasks.length) return;
-  app.study = {
-    sessionId: crypto.randomUUID(), source: "scheduled", activity: "spelling", manual: false,
-    fresh, tasks, familiarIndex: 0, recognitionIndex: 0, queue: tasks.map(word => word.id),
-    completed: 0, total: tasks.length, failed: new Set(), streaks: new Map(), currentId: null,
-    feedbackLocked: false, correctAttempts: 0, wrongAttempts: 0
-  };
+    const data = await request("/api/study-sessions", { method: "POST", body: JSON.stringify(payload) });
+    app.state = data.state;
+    resumeActiveSession();
+  } catch (error) { toast(error.message); }
+}
+
+function resumeActiveSession() {
+  const active = app.state.activeSession;
+  if (!active) return go("home");
+  app.study = { sessionId: active.id, source: active.source, activity: active.mode, manual: active.source !== "scheduled", total: active.total, currentId: active.currentWordId, feedbackLocked: false };
   go("study");
-  if (fresh.length) showFamiliarize(); else beginSpelling();
+  showActiveStep();
 }
 
 function updateStudyProgress(label, current, total) {
@@ -630,18 +757,19 @@ function updateStudyProgress(label, current, total) {
 }
 
 function showFamiliarize() {
-  const study = app.study;
-  const word = study.fresh[study.familiarIndex];
+  const active = app.state.activeSession;
+  const word = app.state.words.find(item => item.id === active?.familiarizeQueue[0]);
+  if (!word) return showActiveStep();
   $("#study-card").classList.remove("hidden");
   $("#study-complete").classList.add("hidden");
   $("#familiarize-card").classList.remove("hidden");
   $("#spelling-card").classList.add("hidden");
   $("#recognition-card").classList.add("hidden");
-  study.currentId = word.id;
+  app.study.currentId = word.id;
   $("#familiar-word").textContent = word.spelling;
   renderStudyPartOfSpeech("#familiar-pos", word);
   $("#familiar-meaning").textContent = word.meaning;
-  updateStudyProgress("认读新词", study.familiarIndex + 1, study.fresh.length);
+  updateStudyProgress("认读新词", active.total - active.queue.length + 1, active.total);
   setTimeout(() => speak(word.spelling), 180);
 }
 
@@ -659,10 +787,10 @@ function currentWord() {
 }
 
 function showNextRecognition() {
-  const study = app.study;
-  if (study.recognitionIndex >= study.tasks.length) return finishStudy();
-  const word = study.tasks[study.recognitionIndex];
-  study.currentId = word.id;
+  const active = app.state.activeSession;
+  const word = app.state.words.find(item => item.id === active?.queue[0]);
+  if (!word) return;
+  app.study.currentId = word.id;
   $("#study-card").classList.remove("hidden");
   $("#study-complete").classList.add("hidden");
   $("#familiarize-card").classList.add("hidden");
@@ -673,35 +801,30 @@ function showNextRecognition() {
   $("#recognition-meaning").textContent = word.meaning;
   $("#recognition-answer").classList.add("hidden");
   $("#reveal-recognition").classList.remove("hidden");
-  updateStudyProgress("自主认读", study.recognitionIndex + 1, study.total);
+  updateStudyProgress("自主认读", active.completed + 1, active.total);
   setTimeout(() => speak(word.spelling), 180);
 }
 
 async function gradeRecognition(correct) {
-  const study = app.study;
   const word = currentWord();
-  const sessionCompleted = study.recognitionIndex === study.tasks.length - 1;
   try {
     const data = await request("/api/attempts", {
       method: "POST",
       body: JSON.stringify({
-        wordId: word.id, sessionId: study.sessionId, source: "manual-free", mode: "recognition",
-        answer: correct ? "认识" : "不认识", correct, completedRound: true, sessionCompleted
+        attemptId: crypto.randomUUID(), wordId: word.id, sessionId: app.study.sessionId, remembered: correct
       })
     });
     app.state = data.state;
+    if (data.completionReport) return showCompletionReport(data.completionReport);
   } catch (error) { return toast(error.message); }
-  study.completed += 1;
-  if (correct) study.correctAttempts += 1; else study.wrongAttempts += 1;
-  study.recognitionIndex += 1;
   showNextRecognition();
 }
 
 function showNextSpelling() {
-  const study = app.study;
-  if (!study.queue.length) return finishStudy();
-  study.currentId = study.queue.shift();
-  study.feedbackLocked = false;
+  const active = app.state.activeSession;
+  if (!active?.queue.length) return;
+  app.study.currentId = active.queue[0];
+  app.study.feedbackLocked = false;
   const word = currentWord();
   renderStudyPartOfSpeech("#spell-pos", word);
   $("#spell-meaning").textContent = word.meaning;
@@ -709,73 +832,67 @@ function showNextSpelling() {
   $("#spelling-input").disabled = false;
   $("#answer-feedback").className = "answer-feedback hidden";
   $("#submit-spelling").textContent = "提交答案";
-  updateStudyProgress(study.manual ? "自主拼写" : "拼写练习", study.completed + 1, study.total);
+  updateStudyProgress(app.study.manual ? "自主拼写" : "拼写练习", active.completed + 1, active.total);
   $("#spelling-input").focus();
 }
 
-function requeueLater(wordId) {
-  const queue = app.study.queue;
-  const position = Math.min(3, queue.length);
-  queue.splice(position, 0, wordId);
+function spellingUsesSilentPrompt() {
+  return true;
+}
+
+function finishStudy() {
+  if (app.study?.pendingReport) showCompletionReport(app.study.pendingReport);
+}
+
+function requeueLater() {
+  // V1.3 起由服务端持久化并维护强化队列。
 }
 
 async function submitSpelling(event) {
   event.preventDefault();
   const study = app.study;
-  if (study.feedbackLocked) return showNextSpelling();
+  if (study.feedbackLocked) return study.pendingReport ? showCompletionReport(study.pendingReport) : showActiveStep();
   const word = currentWord();
   const answer = $("#spelling-input").value;
   if (!answer.trim()) return toast("请先输入英文拼写");
-  const correct = normalizeAnswer(answer) === normalizeAnswer(word.spelling);
-  let completedRound = false;
-  if (!correct) {
-    study.failed.add(word.id);
-    study.streaks.set(word.id, 0);
-    study.wrongAttempts += 1;
-    requeueLater(word.id);
-  } else if (study.failed.has(word.id)) {
-    const streak = (study.streaks.get(word.id) || 0) + 1;
-    study.streaks.set(word.id, streak);
-    study.correctAttempts += 1;
-    if (streak >= 2) { completedRound = true; study.completed += 1; }
-    else requeueLater(word.id);
-  } else {
-    completedRound = true;
-    study.correctAttempts += 1;
-    study.completed += 1;
-  }
-  const sessionCompleted = study.manual && completedRound && study.queue.length === 0;
+  let data;
   try {
-    const data = await request("/api/attempts", { method: "POST", body: JSON.stringify({
-      wordId: word.id, sessionId: study.sessionId, source: study.source, mode: "spelling",
-      answer, correct, completedRound, sessionCompleted
+    data = await request("/api/attempts", { method: "POST", body: JSON.stringify({
+      attemptId: crypto.randomUUID(), wordId: word.id, sessionId: study.sessionId, answer
     }) });
     app.state = data.state;
-  } catch (error) {
-    if (!correct || !completedRound) study.queue.unshift(word.id);
-    return toast(error.message);
-  }
+  } catch (error) { return toast(error.message); }
   study.feedbackLocked = true;
   $("#spelling-input").disabled = true;
   const feedback = $("#answer-feedback");
   feedback.classList.remove("hidden", "wrong");
-  if (correct) {
-    const streak = study.streaks.get(word.id) || 0;
-    feedback.innerHTML = study.failed.has(word.id) && streak < 2 ? `答对了！还需要再答对 <strong>1 次</strong>` : "答对了，很棒！";
+  if (data.correct) {
+    feedback.innerHTML = data.completedRound ? "答对了，很棒！" : `答对了！还需要再答对 <strong>1 次</strong>`;
   } else {
     feedback.classList.add("wrong");
     feedback.innerHTML = `这次没拼对，正确答案是 <strong>${escapeHtml(word.spelling)}</strong>`;
   }
-  $("#submit-spelling").textContent = study.queue.length ? "继续 →" : "查看结果";
+  $("#submit-spelling").textContent = data.completionReport ? "查看结果" : "继续 →";
+  study.pendingReport = data.completionReport || null;
 }
 
-function finishStudy() {
-  $("#study-card").classList.add("hidden");
-  $("#study-complete").classList.remove("hidden");
-  $("#complete-summary").textContent = app.study.manual
-    ? `完成 ${app.study.total} 个单词的自主复习，记住或答对 ${app.study.correctAttempts} 次，纠正 ${app.study.wrongAttempts} 次。`
-    : `完成 ${app.study.total} 个单词，答对 ${app.study.correctAttempts} 次，纠正 ${app.study.wrongAttempts} 次。明天记得回来复习。`;
-  updateStudyProgress(app.study.manual ? "自主复习完成" : "今日完成", app.study.total, app.study.total);
+function showActiveStep() {
+  const active = app.state.activeSession;
+  if (!active) return;
+  app.study.currentId = active.currentWordId;
+  if (active.familiarizeQueue.length) return showFamiliarize();
+  if (active.mode === "recognition") return showNextRecognition();
+  beginSpelling();
+}
+
+async function persistFamiliarize() {
+  const word = currentWord();
+  if (!word) return;
+  try {
+    const data = await request(`/api/study-sessions/${app.study.sessionId}/familiarize`, { method: "POST", body: JSON.stringify({ wordId: word.id }) });
+    app.state = data.state;
+    showActiveStep();
+  } catch (error) { toast(error.message); }
 }
 
 async function restoreBackup(file) {
@@ -871,17 +988,43 @@ function bindEvents() {
     if (event.target.closest(".delete-word")) deleteWord(word.id);
   });
   $$('[data-speak-current]').forEach(button => button.addEventListener("click", () => { const word = currentWord(); if (word) speak(word.spelling); }));
-  $("#next-familiar").addEventListener("click", () => { app.study.familiarIndex += 1; if (app.study.familiarIndex < app.study.fresh.length) showFamiliarize(); else beginSpelling(); });
+  $("#next-familiar").addEventListener("click", persistFamiliarize);
   $("#spelling-card").addEventListener("submit", submitSpelling);
+  $("#spelling-input").addEventListener("keydown", event => {
+    if (event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      $("#spelling-card").requestSubmit();
+    }
+  });
   $("#reveal-recognition").addEventListener("click", () => { $("#reveal-recognition").classList.add("hidden"); $("#recognition-answer").classList.remove("hidden"); });
   $("#recognition-remembered").addEventListener("click", () => gradeRecognition(true));
   $("#recognition-forgot").addEventListener("click", () => gradeRecognition(false));
   $("#leave-study").addEventListener("click", async () => {
-    const manual = app.study?.manual;
-    const message = manual ? "已经提交的练习结果会保留，本次未完成的内容不会计入连续学习。" : "已经提交的答题结果会保留，未完成的单词下次会重新安排。";
-    if (await confirmAction("暂时退出学习？", message, "退出")) go(manual ? "review" : "home");
+    if (await confirmAction("暂时退出学习？", "本场进度会保存在本机，今天再次打开时可以从当前位置继续。", "暂停学习")) go(app.study?.manual ? "review" : "home");
   });
-  $("#back-home").addEventListener("click", () => go("home"));
+  $("#back-home").addEventListener("click", () => acknowledgeCurrentReport("home"));
+  $("#report-growth").addEventListener("click", () => acknowledgeCurrentReport("growth"));
+  $("#load-more-sessions").addEventListener("click", loadMoreSessions);
+  $("#session-history").addEventListener("click", event => {
+    const row = event.target.closest("[data-session-id]");
+    if (row) openHistoricalReport(row.dataset.sessionId);
+  });
+  $("#study-complete").addEventListener("click", event => {
+    const button = event.target.closest(".report-expand");
+    if (!button) return;
+    button.previousElementSibling.classList.remove("hidden");
+    button.remove();
+  });
+  const closeMigration = async destination => {
+    try {
+      const data = await request("/api/achievement/migration-notice/acknowledge", { method: "POST", body: "{}" });
+      app.state = data.state;
+      $("#migration-modal").classList.add("hidden");
+      if (destination) go(destination);
+    } catch (error) { toast(error.message); }
+  };
+  $("#migration-close").addEventListener("click", () => closeMigration(null));
+  $("#migration-growth").addEventListener("click", () => closeMigration("growth"));
   $("#restore-input").addEventListener("change", event => { if (event.target.files[0]) restoreBackup(event.target.files[0]); event.target.value = ""; });
   $("#shutdown").addEventListener("click", async () => {
     if (!await confirmAction("安全退出工具？", "本地服务会停止。下次使用时重新双击启动文件即可。", "安全退出")) return;
@@ -895,6 +1038,13 @@ async function init() {
   try {
     app.state = await request("/api/state");
     renderHome(); renderLibrary();
+    if (app.state.achievement?.migrationNotice && !app.state.achievement.migrationNotice.acknowledgedAt) {
+      const notice = app.state.achievement.migrationNotice;
+      $("#migration-message").textContent = `已为过去的学习成果补回 ${notice.points} 星光值，并点亮 ${notice.badgeCount} 枚勋章。`;
+      $("#migration-modal").classList.remove("hidden");
+    } else if (app.state.pendingReport) {
+      showCompletionReport(app.state.pendingReport);
+    }
   } catch (error) {
     toast(`无法读取本地数据：${error.message}`);
   }

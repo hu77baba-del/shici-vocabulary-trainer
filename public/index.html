@@ -16,6 +16,7 @@
       </a>
       <nav aria-label="主要导航">
         <button class="nav-item active" data-view="home"><span>⌂</span>今日学习</button>
+        <button class="nav-item" data-view="growth"><span>★</span>星光成长册</button>
         <button class="nav-item" data-view="import"><span>＋</span>添加单词</button>
         <button class="nav-item" data-view="library"><span>▤</span>我的词库</button>
         <button class="nav-item" data-view="review"><span>↻</span>自主复习</button>
@@ -33,12 +34,13 @@
       <section id="view-home" class="view active">
         <div class="welcome-row">
           <div><p class="eyebrow" id="today-label">今天</p><h1>准备好开始了吗？</h1><p class="lead">先看看今天的复习，再决定要认识几个新朋友。</p></div>
-          <div id="streak-badge" class="streak-badge" role="status" aria-live="polite" aria-label="已连续学习 0 天">
+          <button id="streak-badge" class="streak-badge" type="button" data-go="growth" aria-label="打开星光成长册">
             <div class="streak-medal" aria-hidden="true"><span class="streak-orbit"></span><span class="streak-star">★</span></div>
-            <div class="streak-copy"><span class="streak-label">连续学习</span><span class="streak-value"><strong id="streak-count">0</strong><em>天</em></span></div>
-            <p id="streak-message">今天完成学习，点亮第一颗星</p>
+            <div class="streak-copy"><span class="streak-label" id="home-level-name">星光起步</span><span class="streak-value"><strong id="home-starlight">0</strong><em>星光</em></span></div>
+            <p id="streak-message">连续学习 <strong id="streak-count">0</strong> 天</p>
+            <div class="home-level-track"><span id="home-level-progress"></span></div>
             <div class="streak-burst" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
-          </div>
+          </button>
         </div>
         <div class="stats-grid">
           <article class="stat-card review"><span class="stat-icon">↻</span><div><small>今日待复习</small><strong id="due-count">0</strong><p>按记忆节奏准时见面</p></div></article>
@@ -57,6 +59,16 @@
         <figure class="home-illustration">
           <img src="/assets/home-english-study-banner.png" alt="女孩在书桌前用单词本和耳机学习英语的插画">
         </figure>
+      </section>
+
+      <section id="view-growth" class="view">
+        <div class="page-heading"><div><p class="eyebrow">STARLIGHT JOURNEY</p><h1>星光成长册</h1><p class="lead">每一次完成、坚持和长期掌握，都在这里留下星光。</p></div></div>
+        <article class="growth-hero panel">
+          <div class="growth-star" aria-hidden="true">★</div>
+          <div class="growth-level-copy"><span id="growth-level-number">等级 1</span><h2 id="growth-level-name">星光起步</h2><p><strong id="growth-starlight">0</strong> 星光值 · 连续学习 <strong id="growth-streak">0</strong> 天</p><div class="growth-progress"><span id="growth-level-progress"></span></div><small id="growth-level-hint">距离下一级还差 100 星光值</small></div>
+        </article>
+        <section class="growth-section" aria-labelledby="badge-wall-title"><div class="panel-title"><div><p class="eyebrow">BADGES</p><h2 id="badge-wall-title">勋章墙</h2></div><span id="badge-count" class="count-badge">0 / 28</span></div><div id="badge-groups" class="badge-groups"></div></section>
+        <section class="growth-section" aria-labelledby="history-title"><div class="panel-title"><div><p class="eyebrow">RECENT LEARNING</p><h2 id="history-title">最近完成记录</h2></div></div><div id="session-history" class="session-history"></div><button id="load-more-sessions" class="secondary-button hidden" type="button">继续加载</button></section>
       </section>
 
       <section id="view-import" class="view">
@@ -135,13 +147,18 @@
             <p class="eyebrow">先看英文和词性，回想中文意思</p><button type="button" class="sound-button" data-speak-current aria-label="播放发音">♬</button><h1 id="recognition-word">example</h1><p id="recognition-pos" class="part-of-speech-badge">n.</p><button id="reveal-recognition" class="primary-button wide" type="button">查看释义</button><div id="recognition-answer" class="recognition-answer hidden"><p id="recognition-meaning" class="card-meaning">例子；实例</p><div class="recognition-actions"><button id="recognition-forgot" class="secondary-button" type="button">还不认识</button><button id="recognition-remembered" class="primary-button" type="button">认识</button></div></div>
           </div>
         </div>
-        <div id="study-complete" class="study-complete hidden"><span class="complete-mark">✓</span><p class="eyebrow">TODAY COMPLETE</p><h1>今天的任务完成啦！</h1><p id="complete-summary">每一次认真回想，都在让记忆变得更牢。</p><button id="back-home" class="primary-button">返回首页</button></div>
+        <div id="study-complete" class="study-complete report-card hidden" aria-live="polite">
+          <span class="complete-mark">★</span><p class="eyebrow">LEARNING COMPLETE</p><h1 id="report-title">今天的任务完成啦！</h1><p id="complete-summary">每一次认真回想，都在让记忆变得更牢。</p>
+          <div id="report-stats" class="report-stats"></div><div id="report-meta" class="report-meta"></div><div id="report-corrected" class="report-list hidden"></div><div id="report-continue" class="report-list hidden"></div><div id="report-rewards" class="report-rewards"></div><div id="report-badges" class="report-badges hidden"></div>
+          <div class="report-actions"><button id="back-home" class="secondary-button">返回首页</button><button id="report-growth" class="primary-button" type="button">查看星光成长册</button></div>
+        </div>
       </section>
     </main>
   </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="confirm-modal" class="modal hidden" role="dialog" aria-modal="true"><div class="modal-card"><h2 id="modal-title">确认操作</h2><p id="modal-message"></p><div class="modal-actions"><button id="modal-cancel" class="secondary-button">取消</button><button id="modal-confirm" class="danger-button">确认</button></div></div></div>
+  <div id="migration-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="migration-title"><div class="modal-card migration-card"><div class="migration-star" aria-hidden="true">★</div><p class="eyebrow">WELCOME TO V1.3.0</p><h2 id="migration-title">过去的努力，已经变成星光</h2><p id="migration-message"></p><div class="modal-actions"><button id="migration-close" class="secondary-button">稍后再看</button><button id="migration-growth" class="primary-button">查看成长册</button></div></div></div>
   <script src="/ocr-parser.js"></script>
   <script type="module" src="/vendor/paddleocr/runtime/paddle-ocr.js"></script>
   <script type="module" src="/app.js"></script>
