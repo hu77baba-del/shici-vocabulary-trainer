@@ -15,6 +15,7 @@ const app = {
   toastTimer: null,
   streakAnimationTimer: null,
   lastRenderedStreak: null,
+  librarySelection: new Set(),
   reviewSelection: new Set()
 };
 
@@ -260,13 +261,18 @@ function clearRetry() {
   $("#ocr-retry-preview").style.transform = "";
 }
 
-function showRetry(file, rotation = 0) {
+function showRetry(file, rotation = 0, reason = "unmatched") {
   clearRetry();
   app.retryFile = file;
   app.retryRotation = rotation;
   app.retryObjectUrl = URL.createObjectURL(file);
   $("#ocr-retry-preview").src = app.retryObjectUrl;
   $("#ocr-retry-preview").style.transform = `rotate(${rotation}deg)`;
+  const orientationLikely = reason === "orientation";
+  $("#ocr-retry-title").textContent = orientationLikely ? "这张照片可能需要调整方向" : "暂时没有配对成功";
+  $("#ocr-retry-message").textContent = orientationLikely
+    ? "检测到页面方向可能不正，可以按建议旋转后重新识别；照片仍只在本机处理。"
+    : "没有形成完整的“英文＋中文释义”。旋转不一定有效，也可以重新拍摄或使用手工录入。";
   $("#ocr-retry").classList.remove("hidden");
 }
 
@@ -314,6 +320,7 @@ async function recognizeFiles(files, forcedRotation = 0) {
   updateOcrProgress("正在加载本地模型……", 5);
   const all = forcedRotation ? [...app.candidates] : [];
   let retry = null;
+  let needsReview = false;
   try {
     await ensureOCREngine();
     for (let i = 0; i < supported.length; i += 1) {
@@ -321,20 +328,24 @@ async function recognizeFiles(files, forcedRotation = 0) {
       const recognized = await recognizeImage(supported[i], i, forcedRotation);
       const parsed = recognized.parsed;
       updateOcrProgress(`正在整理第 ${i + 1} / ${supported.length} 张照片的中英文……`, 78 + i / supported.length * 12);
-      if (parsed.needsRetry && !retry) retry = { file: supported[i], rotation: recognized.suggestedRotation };
-      else all.push(...parsed.candidates);
+      if (parsed.needsRetry && !retry) {
+        retry = { file: supported[i], rotation: recognized.suggestedRotation, reason: recognized.suggestedRotation ? "orientation" : "unmatched" };
+      } else {
+        all.push(...parsed.candidates);
+        needsReview ||= parsed.needsReview === true;
+      }
     }
     updateOcrProgress("正在整理词表……", 94);
     app.candidates = all;
     renderCandidates();
     if (retry) {
-      showRetry(retry.file, retry.rotation);
-      toast(all.length ? "部分照片需要旋转后重试" : "请调整照片方向后重新识别");
+      showRetry(retry.file, retry.rotation, retry.reason);
+      toast(all.length ? "部分照片没有形成可靠配对" : (retry.reason === "orientation" ? "可以按建议旋转后重新识别" : "没有形成可靠的中英配对"));
     } else if (all.length) {
       clearRetry();
-      toast(`识别完成，请校对 ${all.length} 个词条`);
+      toast(needsReview ? `识别完成，${all.length} 个词条中有内容需要校对` : `识别完成，请校对 ${all.length} 个词条`);
     } else {
-      throw new Error("没有识别到完整的“英文＋中文释义”，请旋转照片重试或使用手工录入");
+      throw new Error("没有识别到完整的“英文＋中文释义”，请重新拍摄或使用手工录入");
     }
   } catch (error) {
     console.error("OCR failed", error);
@@ -374,16 +385,28 @@ async function importCandidates() {
   } catch (error) { toast(error.message); }
 }
 
-function renderLibrary() {
-  if (!app.state) return;
+function filteredLibraryWords() {
   const query = $("#word-search").value.trim().toLocaleLowerCase();
   const filter = $("#status-filter").value;
-  const words = app.state.words.filter(word => {
+  return app.state.words.filter(word => {
     const status = word.status === "learning" ? "review" : word.status;
     return (filter === "all" || status === filter) && (!query || word.spelling.toLocaleLowerCase().includes(query) || word.meaning.includes(query));
   });
-  $("#library-body").innerHTML = words.map(word => `<tr data-id="${word.id}"><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong><button class="speak-row">♬ 播放发音</button></td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.nextDueDate || "—"}</td><td>${word.failureCount}</td><td><button class="table-action edit-word">编辑</button> <button class="table-action reset-word">重学</button> <button class="table-action danger delete-word">删除</button></td></tr>`).join("");
+}
+
+function renderLibrary() {
+  if (!app.state) return;
+  const words = filteredLibraryWords();
+  const existingIds = new Set(app.state.words.map(word => word.id));
+  app.librarySelection = new Set([...app.librarySelection].filter(id => existingIds.has(id)));
+  $("#library-body").innerHTML = words.map(word => `<tr data-id="${word.id}" class="${app.librarySelection.has(word.id) ? "library-row-selected" : ""}"><td><input class="library-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.librarySelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong><button class="speak-row">♬ 播放发音</button></td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.nextDueDate || "—"}</td><td>${word.failureCount}</td><td><button class="table-action edit-word">编辑</button> <button class="table-action reset-word">重学</button> <button class="table-action danger delete-word">删除</button></td></tr>`).join("");
   $("#library-empty").classList.toggle("hidden", words.length > 0);
+  const selectAll = $("#library-select-all");
+  selectAll.disabled = words.length === 0;
+  selectAll.checked = words.length > 0 && words.every(word => app.librarySelection.has(word.id));
+  selectAll.indeterminate = words.some(word => app.librarySelection.has(word.id)) && !words.every(word => app.librarySelection.has(word.id));
+  $("#library-selection-count").textContent = `已选 ${app.librarySelection.size} 个`;
+  $("#delete-selected-words").disabled = app.librarySelection.size === 0;
 }
 
 function learnedWords() {
@@ -508,6 +531,21 @@ async function deleteWord(id) {
   if (!await confirmAction("删除这个词？", `“${word.spelling}”及其学习记录将被永久删除。`, "删除")) return;
   const data = await request(`/api/words/${id}`, { method: "DELETE" });
   app.state = data.state; renderLibrary(); toast("词条已删除");
+}
+
+async function deleteSelectedWords() {
+  const ids = [...app.librarySelection];
+  if (!ids.length) return;
+  const selectedWords = ids.map(id => app.state.words.find(word => word.id === id)).filter(Boolean);
+  const names = selectedWords.slice(0, 3).map(word => `“${word.spelling}”`).join("、");
+  if (!await confirmAction(`批量删除 ${selectedWords.length} 个单词？`, `${names}${selectedWords.length > 3 ? "等" : ""}及其学习记录将被永久删除。此操作不能撤销。`, `删除 ${selectedWords.length} 个单词`)) return;
+  try {
+    const data = await request("/api/words", { method: "DELETE", body: JSON.stringify({ ids }) });
+    app.state = data.state;
+    app.librarySelection.clear();
+    renderLibrary();
+    toast(`已删除 ${data.deletedCount} 个单词`);
+  } catch (error) { toast(error.message); }
 }
 
 async function startStudy() {
@@ -756,6 +794,20 @@ function bindEvents() {
   $("#confirm-import").addEventListener("click", importCandidates);
   $("#word-search").addEventListener("input", renderLibrary);
   $("#status-filter").addEventListener("change", renderLibrary);
+  $("#library-select-all").addEventListener("change", event => {
+    for (const word of filteredLibraryWords()) {
+      if (event.target.checked) app.librarySelection.add(word.id); else app.librarySelection.delete(word.id);
+    }
+    renderLibrary();
+  });
+  $("#delete-selected-words").addEventListener("click", deleteSelectedWords);
+  $("#library-body").addEventListener("change", event => {
+    const checkbox = event.target.closest(".library-word-check");
+    if (!checkbox) return;
+    const id = checkbox.closest("tr").dataset.id;
+    if (checkbox.checked) app.librarySelection.add(id); else app.librarySelection.delete(id);
+    renderLibrary();
+  });
   $("#library-body").addEventListener("click", event => {
     const row = event.target.closest("tr"); if (!row) return;
     const word = app.state.words.find(item => item.id === row.dataset.id);

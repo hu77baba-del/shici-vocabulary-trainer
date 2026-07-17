@@ -128,12 +128,63 @@ test("每日新词计划固定词条，开始后只能增加", async () => {
   assert.equal(data.plan.count, 3);
 });
 
+test("批量删除同步清理学习记录和当天计划", async () => {
+  let state = await (await fetch(`${baseUrl}/api/state`)).json();
+  const assignedId = state.settings.dailyNewPlan.wordIds[0];
+  let response = await fetch(`${baseUrl}/api/words/import`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ words: [{ spelling: "remove", meaning: "删除" }, { spelling: "replacement", meaning: "替补" }] })
+  });
+  let data = await response.json();
+  const [removeWord, replacementWord] = data.added;
+  await fetch(`${baseUrl}/api/attempts`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wordId: removeWord.id, sessionId: "batch-delete", mode: "spelling", answer: "remove", correct: true, completedRound: true })
+  });
+
+  response = await fetch(`${baseUrl}/api/words`, {
+    method: "DELETE", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [assignedId, removeWord.id, removeWord.id] })
+  });
+  data = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(data.deletedCount, 2, "重复 ID 只应删除一次");
+  assert.equal(data.state.words.length, 3);
+  assert.equal(data.state.settings.dailyNewPlan.count, 2);
+  assert.ok(!data.state.settings.dailyNewPlan.wordIds.includes(assignedId));
+  assert.ok(!data.state.reviews.some(record => record.wordId === removeWord.id));
+
+  response = await fetch(`${baseUrl}/api/words`, {
+    method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [] })
+  });
+  assert.equal(response.status, 400);
+
+  response = await fetch(`${baseUrl}/api/settings/daily-new-plan`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ count: 3 })
+  });
+  data = await response.json();
+  assert.equal(data.plan.count, 3);
+  assert.ok(data.plan.wordIds.includes(replacementWord.id));
+});
+
 test("拒绝缺少释义或包含非法字符的词条", async () => {
   const response = await fetch(`${baseUrl}/api/words/import`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ words: [{ spelling: "bad_word!", meaning: "坏词" }] })
   });
   assert.equal(response.status, 400);
+});
+
+test("允许导入由斜杠连接的同义英文短语", async () => {
+  const response = await fetch(`${baseUrl}/api/words/import`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ words: [{ spelling: "meet with / face many difficulties", meaning: "遇到／面临许多困难" }] })
+  });
+  const data = await response.json();
+  assert.equal(response.status, 201);
+  assert.equal(data.added[0].spelling, "meet with/face many difficulties");
+  const cleanup = await fetch(`${baseUrl}/api/words/${data.added[0].id}`, { method: "DELETE" });
+  assert.equal(cleanup.status, 200);
 });
 
 test("答错后重置阶段，连续过关后进入一天复习", async () => {

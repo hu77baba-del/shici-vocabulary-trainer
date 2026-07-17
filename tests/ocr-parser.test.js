@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const expected = require("./fixtures/expected-ocr.json");
 const expectedMultiColumn = require("./fixtures/expected-ocr-e7bd80.json");
 const expectedStarred = require("./fixtures/expected-ocr-ad34e2.json");
+const expectedPerspective = require("./fixtures/expected-ocr-7ece03.json");
 const parser = require("../public/ocr-parser.js");
 
 const image = { width: 1600, height: 1200 };
@@ -56,6 +57,26 @@ test("无表格内容会要求旋转或重新识别", () => {
   assert.equal(result.needsRetry, true);
 });
 
+test("斜杠连接的两行短语可以完整配对且不会误提示旋转", () => {
+  const rows = [
+    { spelling: "meet with/face many difficulties", meaning: "遇到／面临许多困难" },
+    { spelling: "do something wrong", meaning: "做错事" }
+  ];
+  const items = [];
+  rows.forEach((row, index) => {
+    const y = 180 + index * 76;
+    items.push({ text: index === 0 ? "meet with / face many difficulties" : row.spelling, score: 0.99, poly: box(280, y, 500) });
+    items.push({ text: row.meaning, score: 0.99, poly: box(980, y + 2, 360) });
+  });
+  const result = parser.parse(items, image, 0);
+  assert.equal(result.needsRetry, false);
+  assert.equal(result.needsReview, false);
+  assert.equal(result.matchedCount, 2);
+  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), rows);
+  assert.equal(parser.isEnglishPhrase({ text: "/meet difficulties", score: 0.99 }), false);
+  assert.equal(parser.isEnglishPhrase({ text: "meet//face difficulties", score: 0.99 }), false);
+});
+
 test("多列表格会忽略音标词性表头页脚并保留单字释义", () => {
   const items = [
     { text: "序号", score: 0.99, poly: box(100, 60, 80) },
@@ -81,9 +102,34 @@ test("多列表格会忽略音标词性表头页脚并保留单字释义", () =>
   assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedMultiColumn);
 });
 
+test("透视倾斜的多列表格不会把整列释义串到上一行", () => {
+  const slope = -0.08;
+  const headerY = x => 100 + slope * x;
+  const items = [
+    { text: "序号", score: 0.99, poly: box(100, headerY(100), 60) },
+    { text: "单词", score: 0.99, poly: box(320, headerY(320), 80) },
+    { text: "音标", score: 0.99, poly: box(720, headerY(720), 80) },
+    { text: "词性", score: 0.99, poly: box(1080, headerY(1080), 80) },
+    { text: "中文释义", score: 0.99, poly: box(1300, headerY(1300), 150) }
+  ];
+  expectedPerspective.forEach(({ spelling, meaning }, index) => {
+    const rowY = 220 + index * 72;
+    items.push({ text: spelling, score: 0.98, poly: box(320, rowY + slope * 320, 220) });
+    const curvedPerspectiveOffset = slope * 1300 + index * 6;
+    items.push({ text: meaning, score: 0.98, poly: box(1300, rowY + curvedPerspectiveOffset, 80 + meaning.length * 38) });
+  });
+
+  const result = parser.parse(items, image, 0);
+  assert.equal(result.matchedCount, expectedPerspective.length);
+  assert.ok(Math.abs(result.quality.rowSlope - slope) < 0.005);
+  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedPerspective);
+});
+
 test("低置信度单字中文不会作为释义导入", () => {
   assert.equal(parser.isChineseMeaning({ text: "板", score: 0.99 }), true);
   assert.equal(parser.isChineseMeaning({ text: "商", score: 0.33 }), false);
+  assert.equal(parser.isChineseMeaning({ text: "（诚实的）person always tells the truth.", score: 0.99 }), false);
+  assert.equal(parser.isChineseMeaning({ text: "v.露营n.营地", score: 0.99 }), true);
 });
 
 test("教材词首星号会被清除但不会放宽其他英文符号", () => {

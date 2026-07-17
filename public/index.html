@@ -70,7 +70,7 @@
           <div id="ocr-progress" class="ocr-progress hidden"><div class="spinner"></div><div><strong id="ocr-status">正在准备本地识别模型……</strong><div class="progress-track"><span id="ocr-progress-bar"></span></div><small>首次加载需要一点时间，照片不会上传到网络</small></div></div>
           <article id="ocr-retry" class="ocr-retry hidden">
             <div class="retry-preview"><img id="ocr-retry-preview" alt="等待重新识别的照片预览"></div>
-            <div><h3>这张照片需要调整方向</h3><p>识别到的成对词条较少。请旋转照片后重新识别，照片仍只在本机处理。</p><div class="retry-actions"><button id="rotate-left" type="button" class="secondary-button">↶ 向左旋转</button><button id="rotate-right" type="button" class="secondary-button">↷ 向右旋转</button><button id="retry-ocr" type="button" class="primary-button">重新识别</button></div></div>
+            <div><h3 id="ocr-retry-title">暂时没有配对成功</h3><p id="ocr-retry-message">没有形成完整的“英文＋中文释义”。可以尝试旋转，也可以重新拍摄或使用手工录入。</p><div class="retry-actions"><button id="rotate-left" type="button" class="secondary-button">↶ 向左旋转</button><button id="rotate-right" type="button" class="secondary-button">↷ 向右旋转</button><button id="retry-ocr" type="button" class="primary-button">重新识别</button></div></div>
           </article>
         </div>
         <div id="manual-import" class="import-mode">
@@ -87,8 +87,8 @@
       <section id="view-library" class="view">
         <div class="page-heading"><div><p class="eyebrow">MY WORDS</p><h1>我的词库</h1><p class="lead">所有单词都在这里，可以随时修改或重新学习。</p></div><button id="library-add" class="primary-button">＋ 添加单词</button></div>
         <article class="panel">
-          <div class="library-toolbar"><label class="search-box">⌕<input id="word-search" type="search" placeholder="搜索英文或中文释义"></label><select id="status-filter"><option value="all">全部状态</option><option value="new">未学习</option><option value="review">复习中</option><option value="mastered">已掌握</option></select></div>
-          <div class="table-wrap"><table><thead><tr><th>英文</th><th>中文释义</th><th>状态</th><th>下次复习</th><th>错误</th><th>操作</th></tr></thead><tbody id="library-body"></tbody></table></div>
+          <div class="library-toolbar"><label class="search-box">⌕<input id="word-search" type="search" placeholder="搜索英文或中文释义"></label><select id="status-filter"><option value="all">全部状态</option><option value="new">未学习</option><option value="review">复习中</option><option value="mastered">已掌握</option></select><div class="library-selection-actions"><span id="library-selection-count">已选 0 个</span><button id="delete-selected-words" class="bulk-delete-button" type="button" disabled>批量删除</button></div></div>
+          <div class="table-wrap"><table><thead><tr><th><input id="library-select-all" type="checkbox" aria-label="全选当前词库结果"></th><th>英文</th><th>中文释义</th><th>状态</th><th>下次复习</th><th>错误</th><th>操作</th></tr></thead><tbody id="library-body"></tbody></table></div>
           <div id="library-empty" class="empty-state hidden">没有找到符合条件的单词</div>
         </article>
       </section>

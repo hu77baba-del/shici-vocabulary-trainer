@@ -75,10 +75,12 @@ function cleanText(value, max = 300) {
 }
 
 function normalizeWord(raw) {
-  const spelling = cleanText(raw.spelling, 120);
+  const spelling = cleanText(raw.spelling, 120).replace(/\s*\/\s*/g, "/");
   const meaning = cleanText(raw.meaning, 300);
   if (!spelling || !meaning) throw new Error("英文和中文释义不能为空");
-  if (!/^[A-Za-z][A-Za-z\s'’.-]*$/.test(spelling)) throw new Error(`英文格式不正确：${spelling}`);
+  if (!/^[A-Za-z][A-Za-z\s'’.\/-]*$/.test(spelling) || /(?:^|[^A-Za-z])\/|\/(?:[^A-Za-z]|$)/.test(spelling)) {
+    throw new Error(`英文格式不正确：${spelling}`);
+  }
   return { spelling, meaning };
 }
 
@@ -105,6 +107,14 @@ function saveDailyPlan(store, count) {
   store.settings ||= {};
   store.settings.dailyNewPlan = plan;
   return plan;
+}
+
+function removeWords(store, wordIds) {
+  const ids = new Set(wordIds);
+  store.words = store.words.filter(word => !ids.has(word.id));
+  store.reviews = store.reviews.filter(record => !ids.has(record.wordId));
+  const plan = activeDailyPlan(store);
+  if (plan) store.settings.dailyNewPlan = plan;
 }
 
 function publicState(store) {
@@ -199,6 +209,18 @@ async function api(req, res, url) {
     return send(res, 201, { added, state: publicState(store) });
   }
 
+  if (req.method === "DELETE" && url.pathname === "/api/words") {
+    const body = await readBody(req);
+    if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > 5000) throw new Error("请选择 1 至 5000 个要删除的单词");
+    if (body.ids.some(id => typeof id !== "string" || !/^[0-9a-f-]+$/i.test(id))) throw new Error("批量删除请求包含无效词条");
+    const ids = [...new Set(body.ids)];
+    const existingIds = new Set(store.words.map(word => word.id));
+    if (ids.some(id => !existingIds.has(id))) throw new Error("部分词条已不存在，请刷新词库后重试");
+    removeWords(store, ids);
+    atomicWrite(store);
+    return send(res, 200, { deletedCount: ids.length, deletedIds: ids, state: publicState(store) });
+  }
+
   const wordMatch = url.pathname.match(/^\/api\/words\/([0-9a-f-]+)$/i);
   if (wordMatch && req.method === "PUT") {
     const body = await readBody(req);
@@ -212,14 +234,7 @@ async function api(req, res, url) {
   if (wordMatch && req.method === "DELETE") {
     const index = store.words.findIndex(word => word.id === wordMatch[1]);
     if (index < 0) return send(res, 404, { error: "没有找到该词条" });
-    store.words.splice(index, 1);
-    store.reviews = store.reviews.filter(record => record.wordId !== wordMatch[1]);
-    const plan = activeDailyPlan(store);
-    if (plan?.wordIds.includes(wordMatch[1])) {
-      plan.wordIds = plan.wordIds.filter(id => id !== wordMatch[1]);
-      plan.count = plan.wordIds.length;
-      store.settings.dailyNewPlan = plan;
-    }
+    removeWords(store, [wordMatch[1]]);
     atomicWrite(store);
     return send(res, 200, { state: publicState(store) });
   }
