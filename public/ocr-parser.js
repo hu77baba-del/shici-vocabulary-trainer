@@ -7,7 +7,17 @@
 
   const HEADER_TEXTS = ["序号", "单词", "英文", "词组", "音标", "词性", "中文释义", "词组板块", "单词板块", "粗体词"];
   const ROW_HEADER_TEXTS = new Set(["序号", "单词", "英文", "词组", "音标", "词性", "中文释义"]);
-  const PART_OF_SPEECH = /^(?:n|v|adj|adv|prep|pron|conj|num|art|interj|aux|modal)(?:\s+v)?\.?$/i;
+  const PART_OF_SPEECH = /^(?:(?:n|v|vt|vi|adj|adv|prep|pron|conj|num|art|interj|aux)\.?|modal\s+v\.)(?:\s*[\/，；、|]\s*(?:(?:n|v|vt|vi|adj|adv|prep|pron|conj|num|art|interj|aux)\.?|modal\s+v\.))*$/i;
+  const SAFE_UNKNOWN_PART_OF_SPEECH = /^(?:[a-z]{1,6}\.)(?:\s+[a-z]{1,6}\.)*(?:\s*[\/，；、|]\s*(?:[a-z]{1,6}\.)(?:\s+[a-z]{1,6}\.)*)*$/i;
+  const PART_OF_SPEECH_ALIASES = new Map([
+    ["n", "n."], ["n.", "n."], ["v", "v."], ["v.", "v."],
+    ["vt", "vt."], ["vt.", "vt."], ["vi", "vi."], ["vi.", "vi."],
+    ["adj", "adj."], ["adj.", "adj."], ["adv", "adv."], ["adv.", "adv."],
+    ["prep", "prep."], ["prep.", "prep."], ["pron", "pron."], ["pron.", "pron."],
+    ["conj", "conj."], ["conj.", "conj."], ["num", "num."], ["num.", "num."],
+    ["art", "art."], ["art.", "art."], ["interj", "interj."], ["interj.", "interj."],
+    ["aux", "aux."], ["aux.", "aux."], ["modal v", "modal v."], ["modal v.", "modal v."]
+  ]);
 
   function normalizeText(value) {
     return String(value || "").replace(/[\u00a0\u3000]/g, " ").replace(/\s+/g, " ").trim();
@@ -21,6 +31,25 @@
     return normalizeText(value).replace(/^(?:中文释义|中文意思|释义)\s*[:：]?\s*/, "");
   }
 
+  function normalizePartOfSpeechText(value) {
+    const tokens = normalizeText(value).toLocaleLowerCase("en-US")
+      .replace(/[，；、|]+/g, "/")
+      .split("/")
+      .map(token => token.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .map(token => PART_OF_SPEECH_ALIASES.get(token) || token);
+    return [...new Set(tokens)].join("/");
+  }
+
+  function isPartOfSpeech(line) {
+    const text = normalizeText(line.text);
+    return Number(line.score) >= 0.75 && (PART_OF_SPEECH.test(text) || SAFE_UNKNOWN_PART_OF_SPEECH.test(text));
+  }
+
+  function isPhraseSpelling(spelling) {
+    return /\s/.test(normalizeEnglishText(spelling));
+  }
+
   function countMatches(text, pattern) {
     return (text.match(pattern) || []).length;
   }
@@ -29,7 +58,7 @@
     const text = normalizeEnglishText(line.text);
     const lowerCount = countMatches(text, /[a-z]/g);
     if (Number(line.score) < 0.8 || lowerCount < 2) return false;
-    if (PART_OF_SPEECH.test(text)) return false;
+    if (isPartOfSpeech(line)) return false;
     if (!/^[A-Za-z][A-Za-z\s.'’,\/-]*[A-Za-z.]$/.test(text)) return false;
     if (/(?:^|[^A-Za-z])\/|\/(?:[^A-Za-z]|$)/.test(text)) return false;
     return lowerCount / Math.max(1, text.replace(/\s/g, "").length) >= 0.45;
@@ -76,6 +105,16 @@
 
   function rowPosition(line) {
     return Number.isFinite(line.rowY) ? line.rowY : line.y;
+  }
+
+  function distanceFromPairedRow(pair, line) {
+    const span = pair.zh.x - pair.en.x;
+    if (!Number.isFinite(span) || Math.abs(span) < 1) {
+      return Math.abs(rowPosition(line) - rowPosition(pair.en));
+    }
+    const progress = (line.x - pair.en.x) / span;
+    const expectedY = pair.en.y + (pair.zh.y - pair.en.y) * progress;
+    return Math.abs(line.y - expectedY);
   }
 
   function estimateRowSlope(lines, medianHeight) {
@@ -171,6 +210,7 @@
     const fields = [
       ["matchedCount", 1],
       ["missingCount", -1],
+      ["missingPartOfSpeechCount", -1],
       ["unmatchedChineseCount", -1],
       ["checkCount", -1],
       ["pairRate", 1],
@@ -187,10 +227,11 @@
     const lines = rawItems.map(item => transformLine(item, rotation, image)).filter(Boolean);
     const english = lines.filter(isEnglishPhrase);
     const chinese = lines.filter(isChineseMeaning);
+    const partOfSpeech = lines.filter(isPartOfSpeech);
     if (!english.length || !chinese.length) {
       return {
         rotation, candidates: [], score: -Infinity, pairRate: 0, matchedCount: 0,
-        quality: { matchedCount: 0, missingCount: 0, checkCount: 0, unmatchedEnglishCount: english.length, unmatchedChineseCount: chinese.length, pairRate: 0, avgConfidence: 0, rowSlope: 0 }
+        quality: { matchedCount: 0, missingCount: 0, missingPartOfSpeechCount: 0, checkCount: 0, unmatchedEnglishCount: english.length, unmatchedChineseCount: chinese.length, pairRate: 0, avgConfidence: 0, rowSlope: 0 }
       };
     }
 
@@ -228,7 +269,7 @@
     if (!bestColumns) {
       return {
         rotation, candidates: [], score: -Infinity, pairRate: 0, matchedCount: 0,
-        quality: { matchedCount: 0, missingCount: 0, checkCount: 0, unmatchedEnglishCount: english.length, unmatchedChineseCount: chinese.length, pairRate: 0, avgConfidence: 0, rowSlope }
+        quality: { matchedCount: 0, missingCount: 0, missingPartOfSpeechCount: 0, checkCount: 0, unmatchedEnglishCount: english.length, unmatchedChineseCount: chinese.length, pairRate: 0, avgConfidence: 0, rowSlope }
       };
     }
 
@@ -241,20 +282,53 @@
       && en.score >= 0.92 && rowPosition(en) >= minY && rowPosition(en) <= maxY);
     const unmatchedChinese = bestColumns.chinese.filter(zh => !pairs.some(pair => pair.zh === zh));
 
+    const usedPartOfSpeech = new Set();
+    const matchedPartOfSpeech = new Map();
+    const maxPartOfSpeechRowDistance = Math.max(12, medianHeight * 0.75);
+    [...pairs].sort((a, b) => rowPosition(a.en) - rowPosition(b.en)).forEach(pair => {
+      const spelling = normalizeEnglishText(pair.en.text);
+      if (isPhraseSpelling(spelling)) return;
+      const line = partOfSpeech
+        .filter(item => !usedPartOfSpeech.has(item) && item.x > pair.en.x && item.x < pair.zh.x)
+        .map(item => ({ item, distance: distanceFromPairedRow(pair, item) }))
+        .filter(candidate => candidate.distance <= maxPartOfSpeechRowDistance)
+        .sort((a, b) => a.distance - b.distance)[0]?.item;
+      if (line) {
+        usedPartOfSpeech.add(line);
+        matchedPartOfSpeech.set(pair.en, line);
+      }
+    });
+
     const candidates = [
-      ...pairs.map(pair => ({
-        spelling: normalizeEnglishText(pair.en.text),
-        meaning: normalizeChineseMeaningText(pair.zh.text).replace(/[·•]+$/, ""),
-        confidence: Math.min(pair.en.score, pair.zh.score),
-        warning: Math.min(pair.en.score, pair.zh.score) >= 0.92 ? "clear" : "check",
-        y: pair.en.y
-      })),
-      ...unmatched.map(en => ({ spelling: normalizeEnglishText(en.text), meaning: "", confidence: en.score, warning: "missing", y: en.y }))
+      ...pairs.map(pair => {
+        const spelling = normalizeEnglishText(pair.en.text);
+        const phrase = isPhraseSpelling(spelling);
+        const posLine = phrase ? null : matchedPartOfSpeech.get(pair.en);
+        const confidence = Math.min(pair.en.score, pair.zh.score, posLine?.score ?? 1);
+        const missingPartOfSpeech = !phrase && !posLine;
+        const partOfSpeechNeedsReview = missingPartOfSpeech || Boolean(
+          posLine && (posLine.score < 0.92 || !PART_OF_SPEECH.test(normalizeText(posLine.text)))
+        );
+        return {
+          spelling,
+          partOfSpeech: posLine ? normalizePartOfSpeechText(posLine.text) : "",
+          partOfSpeechNeedsReview,
+          meaning: normalizeChineseMeaningText(pair.zh.text).replace(/[·•]+$/, ""),
+          confidence,
+          warning: missingPartOfSpeech ? "missing-pos" : (!partOfSpeechNeedsReview && confidence >= 0.92 ? "clear" : "check"),
+          y: pair.en.y
+        };
+      }),
+      ...unmatched.map(en => ({
+        spelling: normalizeEnglishText(en.text), partOfSpeech: "", partOfSpeechNeedsReview: !isPhraseSpelling(en.text),
+        meaning: "", confidence: en.score, warning: "missing", y: en.y
+      }))
     ].sort((a, b) => a.y - b.y);
 
     const quality = {
       matchedCount: pairs.length,
       missingCount: unmatched.length,
+      missingPartOfSpeechCount: candidates.filter(candidate => candidate.warning === "missing-pos").length,
       checkCount: candidates.filter(candidate => candidate.warning === "check").length,
       unmatchedEnglishCount: bestColumns.english.length - pairs.length,
       unmatchedChineseCount: unmatchedChinese.length,
@@ -272,6 +346,8 @@
     const best = attempts.sort((a, b) => compareQuality(b, a))[0];
     const candidates = best.candidates.map(candidate => ({
       spelling: candidate.spelling,
+      partOfSpeech: candidate.partOfSpeech,
+      partOfSpeechNeedsReview: candidate.partOfSpeechNeedsReview,
       meaning: candidate.meaning,
       confidence: candidate.confidence,
       warning: candidate.warning,
@@ -279,7 +355,10 @@
     }));
     const matchedCount = best.matchedCount || 0;
     const needsRetry = matchedCount === 0;
-    const needsReview = matchedCount > 0 && (best.pairRate < 0.7 || best.quality.missingCount > 0 || best.quality.checkCount > 0);
+    const needsReview = matchedCount > 0 && (
+      best.pairRate < 0.7 || best.quality.missingCount > 0
+      || best.quality.missingPartOfSpeechCount > 0 || best.quality.checkCount > 0
+    );
     return {
       candidates,
       rotation: best.rotation,
@@ -291,5 +370,8 @@
     };
   }
 
-  return { parse, normalizeText, normalizeEnglishText, normalizeChineseMeaningText, isEnglishPhrase, isChineseMeaning, compareQuality };
+  return {
+    parse, normalizeText, normalizeEnglishText, normalizeChineseMeaningText, normalizePartOfSpeechText,
+    isEnglishPhrase, isChineseMeaning, isPartOfSpeech, isPhraseSpelling, compareQuality
+  };
 });

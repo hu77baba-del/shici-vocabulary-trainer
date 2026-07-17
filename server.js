@@ -14,6 +14,21 @@ const BACKUP_DIR = process.env.BACKUP_DIR ? path.resolve(process.env.BACKUP_DIR)
 const PORT_START = Number(process.env.PORT) || 4173;
 const MAX_BODY = 12 * 1024 * 1024;
 const REVIEW_DELAYS = [1, 3, 7, 14, 30];
+const PART_OF_SPEECH_ALIASES = new Map([
+  ["n", "n."], ["n.", "n."], ["noun", "n."],
+  ["v", "v."], ["v.", "v."], ["verb", "v."],
+  ["vt", "vt."], ["vt.", "vt."], ["vi", "vi."], ["vi.", "vi."],
+  ["adj", "adj."], ["adj.", "adj."], ["a", "adj."], ["a.", "adj."], ["adjective", "adj."],
+  ["adv", "adv."], ["adv.", "adv."], ["adverb", "adv."],
+  ["prep", "prep."], ["prep.", "prep."], ["preposition", "prep."],
+  ["pron", "pron."], ["pron.", "pron."], ["pronoun", "pron."],
+  ["conj", "conj."], ["conj.", "conj."], ["conjunction", "conj."],
+  ["num", "num."], ["num.", "num."], ["numeral", "num."],
+  ["art", "art."], ["art.", "art."], ["article", "art."],
+  ["interj", "interj."], ["interj.", "interj."], ["interjection", "interj."],
+  ["aux", "aux."], ["aux.", "aux."], ["auxiliary", "aux."],
+  ["modal", "modal v."], ["modal v", "modal v."], ["modal v.", "modal v."]
+]);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -46,6 +61,7 @@ function readStore() {
     throw new Error("数据文件结构无效");
   }
   parsed.settings = parsed.settings && typeof parsed.settings === "object" ? parsed.settings : {};
+  parsed.words = parsed.words.map(word => ({ ...word, ...normalizeWord(word) }));
   return parsed;
 }
 
@@ -74,6 +90,29 @@ function cleanText(value, max = 300) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function isPhraseSpelling(spelling) {
+  return /\s/.test(String(spelling || "").trim());
+}
+
+function normalizePartOfSpeech(raw) {
+  const value = cleanText(raw, 80)
+    .toLocaleLowerCase("en-US")
+    .replace(/[，；、|]+/g, "/")
+    .replace(/\s*\/\s*/g, "/")
+    .replace(/\/{2,}/g, "/")
+    .replace(/^\/|\/$/g, "");
+  if (!value) return { value: "", recognized: true };
+  if (!/^[a-z.\-/\s]+$/i.test(value)) throw new Error(`词性格式不正确：${value}`);
+  let recognized = true;
+  const tokens = value.split("/").map(token => token.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const normalized = tokens.map(token => {
+    const alias = PART_OF_SPEECH_ALIASES.get(token);
+    if (!alias) recognized = false;
+    return alias || token;
+  });
+  return { value: [...new Set(normalized)].join("/"), recognized };
+}
+
 function normalizeWord(raw) {
   const spelling = cleanText(raw.spelling, 120).replace(/\s*\/\s*/g, "/");
   const meaning = cleanText(raw.meaning, 300);
@@ -81,7 +120,16 @@ function normalizeWord(raw) {
   if (!/^[A-Za-z][A-Za-z\s'’.\/-]*$/.test(spelling) || /(?:^|[^A-Za-z])\/|\/(?:[^A-Za-z]|$)/.test(spelling)) {
     throw new Error(`英文格式不正确：${spelling}`);
   }
-  return { spelling, meaning };
+  const phrase = isPhraseSpelling(spelling);
+  const normalizedPartOfSpeech = phrase ? { value: "", recognized: true } : normalizePartOfSpeech(raw.partOfSpeech);
+  return {
+    spelling,
+    meaning,
+    partOfSpeech: normalizedPartOfSpeech.value,
+    partOfSpeechNeedsReview: phrase ? false : (
+      !normalizedPartOfSpeech.value || raw.partOfSpeechNeedsReview === true || !normalizedPartOfSpeech.recognized
+    )
+  };
 }
 
 function activeDailyPlan(store) {
@@ -299,9 +347,9 @@ async function api(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/restore") {
     const body = await readBody(req);
     if (!body || body.version !== 1 || !Array.isArray(body.words) || !Array.isArray(body.reviews)) throw new Error("备份文件结构无效");
-    for (const word of body.words) normalizeWord(word);
+    const words = body.words.map(word => ({ ...word, ...normalizeWord(word) }));
     backupStore(store);
-    atomicWrite({ version: 1, words: body.words, reviews: body.reviews, settings: body.settings && typeof body.settings === "object" ? body.settings : {} });
+    atomicWrite({ version: 1, words, reviews: body.reviews, settings: body.settings && typeof body.settings === "object" ? body.settings : {} });
     return send(res, 200, { state: publicState(readStore()) });
   }
 
@@ -325,7 +373,7 @@ function serveStatic(req, res, url) {
   res.writeHead(200, {
     "Content-Type": MIME[path.extname(target).toLowerCase()] || "application/octet-stream",
     "Cache-Control": "no-cache",
-    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-eval' blob: data:; worker-src 'self' blob: data:; connect-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'"
+    "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-eval' blob: data:; worker-src 'self' blob: data:; connect-src 'self' data:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'"
   });
   fs.createReadStream(target).pipe(res);
 }

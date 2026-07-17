@@ -82,6 +82,8 @@ test("允许导入重复英文并分别保存", async () => {
   const data = await response.json();
   assert.equal(data.added.length, 2);
   assert.notEqual(data.added[0].id, data.added[1].id);
+  assert.equal(data.added[0].partOfSpeech, "");
+  assert.equal(data.added[0].partOfSpeechNeedsReview, true);
 });
 
 test("每日新词计划固定词条，开始后只能增加", async () => {
@@ -183,8 +185,47 @@ test("允许导入由斜杠连接的同义英文短语", async () => {
   const data = await response.json();
   assert.equal(response.status, 201);
   assert.equal(data.added[0].spelling, "meet with/face many difficulties");
+  assert.equal(data.added[0].partOfSpeech, "");
+  assert.equal(data.added[0].partOfSpeechNeedsReview, false);
   const cleanup = await fetch(`${baseUrl}/api/words/${data.added[0].id}`, { method: "DELETE" });
   assert.equal(cleanup.status, 200);
+});
+
+test("词性可导入、规范化、编辑并进入备份", async () => {
+  let response = await fetch(`${baseUrl}/api/words/import`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ words: [
+      { spelling: "heart", partOfSpeech: "N / Adj", meaning: "心脏；内心" },
+      { spelling: "to be honest", partOfSpeech: "n.", meaning: "说实话" },
+      { spelling: "future", partOfSpeech: "lex.", meaning: "未来" }
+    ] })
+  });
+  let data = await response.json();
+  assert.equal(response.status, 201);
+  const [heart, phrase, unfamiliar] = data.added;
+  assert.equal(heart.partOfSpeech, "n./adj.");
+  assert.equal(heart.partOfSpeechNeedsReview, false);
+  assert.equal(phrase.partOfSpeech, "");
+  assert.equal(phrase.partOfSpeechNeedsReview, false);
+  assert.equal(unfamiliar.partOfSpeech, "lex.");
+  assert.equal(unfamiliar.partOfSpeechNeedsReview, true);
+
+  response = await fetch(`${baseUrl}/api/words/${heart.id}`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spelling: "heart", partOfSpeech: "noun", meaning: "心脏；内心" })
+  });
+  data = await response.json();
+  assert.equal(data.word.partOfSpeech, "n.");
+  assert.equal(data.word.partOfSpeechNeedsReview, false);
+
+  data = await (await fetch(`${baseUrl}/api/backup`)).json();
+  assert.equal(data.words.find(word => word.id === heart.id).partOfSpeech, "n.");
+
+  response = await fetch(`${baseUrl}/api/words`, {
+    method: "DELETE", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [heart.id, phrase.id, unfamiliar.id] })
+  });
+  assert.equal(response.status, 200);
 });
 
 test("答错后重置阶段，连续过关后进入一天复习", async () => {
@@ -273,4 +314,24 @@ test("备份导出包含词库和记录", async () => {
   assert.equal(data.words.length, 3);
   assert.ok(data.reviews.length >= 2);
   assert.equal(data.settings.dailyNewPlan.count, 3);
+});
+
+test("旧格式备份恢复后自动补齐词性兼容字段", async () => {
+  const response = await fetch(`${baseUrl}/api/restore`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      version: 1,
+      words: [
+        { id: "legacy-word", spelling: "example", meaning: "例子", status: "new", reviewStep: -1, nextDueDate: null, failureCount: 0 },
+        { id: "legacy-phrase", spelling: "in this way", meaning: "用这种方式", status: "new", reviewStep: -1, nextDueDate: null, failureCount: 0 }
+      ],
+      reviews: [], settings: {}
+    })
+  });
+  const data = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(data.state.words[0].partOfSpeech, "");
+  assert.equal(data.state.words[0].partOfSpeechNeedsReview, true);
+  assert.equal(data.state.words[1].partOfSpeech, "");
+  assert.equal(data.state.words[1].partOfSpeechNeedsReview, false);
 });

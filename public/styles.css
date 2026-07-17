@@ -204,9 +204,10 @@ th { padding: 13px 12px; color: var(--muted); border-bottom: 1px solid var(--lin
 td { padding: 15px 12px; border-bottom: 1px solid #edf0ec; vertical-align: middle; }
 tr:last-child td { border-bottom: 0; }
 td input { width: 100%; min-width: 160px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.candidate-pos { min-width: 105px; }
 .ocr-badge { display: inline-block; padding: 5px 9px; border-radius: 20px; color: var(--green); background: var(--green-pale); font-size: 11px; white-space: nowrap; }
 .ocr-badge.check { color: #8a641f; background: #fff0cf; }
-.ocr-badge.missing { color: var(--red); background: #f8e7e7; }
+.ocr-badge.missing, .ocr-badge.missing-pos { color: var(--red); background: #f8e7e7; }
 .ocr-badge.manual { color: var(--muted); background: #eef1ed; }
 .row-delete, .table-action { border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .row-delete:hover, .table-action.danger:hover { color: var(--red); }
@@ -227,6 +228,9 @@ select { min-height: 44px; padding: 0 35px 0 14px; border: 1px solid var(--line)
 .status-pill.mastered { color: var(--blue); background: var(--blue-pale); }
 .word-cell strong { display: block; font: 18px Georgia, serif; }
 .word-cell button { margin-top: 4px; padding: 0; border: 0; background: transparent; color: var(--green); cursor: pointer; font-size: 11px; }
+.pos-cell { min-width: 92px; }
+.pos-pill, .part-of-speech-badge { display: inline-block; padding: 5px 10px; border-radius: 20px; color: var(--green-dark); background: var(--green-pale); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.pos-pill.missing, .pos-pill.needs-review, .part-of-speech-badge.needs-review { color: #8a641f; background: #fff0cf; }
 .empty-state { padding: 26px; color: var(--muted); text-align: center; }
 
 .review-settings-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 20px; }
@@ -263,6 +267,7 @@ select { min-height: 44px; padding: 0 35px 0 14px; border: 1px solid var(--line)
 .sound-button { width: 65px; height: 65px; margin: 12px auto 26px; display: grid; place-items: center; border: 0; border-radius: 50%; color: var(--green); background: var(--green-pale); cursor: pointer; font-size: 27px; transition: .2s; }
 .sound-button:hover { transform: scale(1.05); }
 .card-content h1 { margin-bottom: 14px; color: var(--green-dark); font-family: Georgia, serif; font-size: clamp(44px, 8vw, 70px); }
+.part-of-speech-badge { margin: 0 auto 18px; font-size: 14px; }
 .card-meaning, .spell-meaning { margin-bottom: 44px; font-size: 22px; color: #526159; }
 .spell-meaning { font-size: 28px; font-family: Georgia, "Songti SC", serif; color: var(--ink); }
 .wide { width: 100%; min-height: 52px; }

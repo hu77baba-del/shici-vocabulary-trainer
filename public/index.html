@@ -74,12 +74,12 @@
           </article>
         </div>
         <div id="manual-import" class="import-mode">
-          <article class="panel manual-panel"><p>每行输入一组，用制表符或中文冒号分隔英文和中文释义。</p><textarea id="manual-text" rows="10" placeholder="example	例子；实例&#10;remember	记得；记住"></textarea><button id="parse-manual" class="primary-button">生成校对表</button></article>
+          <article class="panel manual-panel"><p>每行输入一组。单词可用制表符输入“英文、词性、中文释义”，词组继续使用“英文、中文释义”。</p><textarea id="manual-text" rows="10" placeholder="example	n.	例子；实例&#10;remember	v.	记得；记住&#10;in this way	用这种方式"></textarea><button id="parse-manual" class="primary-button">生成校对表</button></article>
         </div>
         <article id="candidate-panel" class="panel candidate-panel hidden">
           <div class="panel-title"><div><p class="eyebrow">CHECK BEFORE SAVING</p><h2>请校对识别结果</h2></div><button id="add-row" class="secondary-button">＋ 添加一行</button></div>
           <p class="muted">可以直接修改内容或删除不需要的行。允许相同英文重复保存。</p>
-          <div class="table-wrap"><table><thead><tr><th>#</th><th>英文</th><th>中文释义</th><th>识别状态</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="candidate-body"></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>#</th><th>英文</th><th>词性</th><th>中文释义</th><th>识别状态</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="candidate-body"></tbody></table></div>
           <div class="panel-actions"><span id="candidate-count">0 个词条</span><button id="confirm-import" class="primary-button">确认存入词库</button></div>
         </article>
       </section>
@@ -87,8 +87,8 @@
       <section id="view-library" class="view">
         <div class="page-heading"><div><p class="eyebrow">MY WORDS</p><h1>我的词库</h1><p class="lead">所有单词都在这里，可以随时修改或重新学习。</p></div><button id="library-add" class="primary-button">＋ 添加单词</button></div>
         <article class="panel">
-          <div class="library-toolbar"><label class="search-box">⌕<input id="word-search" type="search" placeholder="搜索英文或中文释义"></label><select id="status-filter"><option value="all">全部状态</option><option value="new">未学习</option><option value="review">复习中</option><option value="mastered">已掌握</option></select><div class="library-selection-actions"><span id="library-selection-count">已选 0 个</span><button id="delete-selected-words" class="bulk-delete-button" type="button" disabled>批量删除</button></div></div>
-          <div class="table-wrap"><table><thead><tr><th><input id="library-select-all" type="checkbox" aria-label="全选当前词库结果"></th><th>英文</th><th>中文释义</th><th>状态</th><th>下次复习</th><th>错误</th><th>操作</th></tr></thead><tbody id="library-body"></tbody></table></div>
+          <div class="library-toolbar"><label class="search-box">⌕<input id="word-search" type="search" placeholder="搜索英文、词性或中文释义"></label><select id="status-filter"><option value="all">全部状态</option><option value="new">未学习</option><option value="review">复习中</option><option value="mastered">已掌握</option></select><div class="library-selection-actions"><span id="library-selection-count">已选 0 个</span><button id="delete-selected-words" class="bulk-delete-button" type="button" disabled>批量删除</button></div></div>
+          <div class="table-wrap"><table><thead><tr><th><input id="library-select-all" type="checkbox" aria-label="全选当前词库结果"></th><th>英文</th><th>词性</th><th>中文释义</th><th>状态</th><th>下次复习</th><th>错误</th><th>操作</th></tr></thead><tbody id="library-body"></tbody></table></div>
           <div id="library-empty" class="empty-state hidden">没有找到符合条件的单词</div>
         </article>
       </section>
@@ -107,8 +107,8 @@
         </article>
         <article id="review-manual" class="panel review-picker">
           <div class="panel-title"><div><h2>手动选择复习词</h2><p class="muted">搜索并勾选任意已经学习过的单词。</p></div><button id="start-selected-review" class="primary-button" type="button" disabled>复习已选 0 个</button></div>
-          <div class="library-toolbar"><label class="search-box">⌕<input id="review-search" type="search" placeholder="搜索英文或中文释义"></label><select id="review-status-filter"><option value="all">全部已学状态</option><option value="learning">学习中</option><option value="review">复习中</option><option value="mastered">已掌握</option></select></div>
-          <div class="table-wrap"><table><thead><tr><th><input id="review-select-all" type="checkbox" aria-label="全选当前结果"></th><th>英文</th><th>中文释义</th><th>状态</th><th>错误</th></tr></thead><tbody id="review-word-body"></tbody></table></div>
+          <div class="library-toolbar"><label class="search-box">⌕<input id="review-search" type="search" placeholder="搜索英文、词性或中文释义"></label><select id="review-status-filter"><option value="all">全部已学状态</option><option value="learning">学习中</option><option value="review">复习中</option><option value="mastered">已掌握</option></select></div>
+          <div class="table-wrap"><table><thead><tr><th><input id="review-select-all" type="checkbox" aria-label="全选当前结果"></th><th>英文</th><th>词性</th><th>中文释义</th><th>状态</th><th>错误</th></tr></thead><tbody id="review-word-body"></tbody></table></div>
           <div id="review-empty" class="empty-state hidden">没有符合条件的已学单词</div>
         </article>
       </section>
@@ -126,13 +126,13 @@
         <div class="study-topbar"><button id="leave-study" class="icon-button" aria-label="退出学习">×</button><div class="study-progress"><span id="study-phase">学习准备</span><div class="progress-track"><span id="study-progress-bar"></span></div></div><span id="study-counter">0 / 0</span></div>
         <div id="study-card" class="study-card">
           <div id="familiarize-card" class="card-content">
-            <p class="eyebrow">先认识一下</p><button class="sound-button" data-speak-current aria-label="播放发音">♬</button><h1 id="familiar-word">example</h1><p id="familiar-meaning" class="card-meaning">例子；实例</p><button id="next-familiar" class="primary-button wide">我记住了，继续 <span>→</span></button>
+            <p class="eyebrow">先认识一下</p><button class="sound-button" data-speak-current aria-label="播放发音">♬</button><h1 id="familiar-word">example</h1><p id="familiar-pos" class="part-of-speech-badge">n.</p><p id="familiar-meaning" class="card-meaning">例子；实例</p><button id="next-familiar" class="primary-button wide">我记住了，继续 <span>→</span></button>
           </div>
           <form id="spelling-card" class="card-content hidden">
-            <p class="eyebrow">听发音，看中文，拼出英文</p><button type="button" class="sound-button" data-speak-current aria-label="播放发音">♬</button><p id="spell-meaning" class="spell-meaning">例子；实例</p><label class="answer-label">请输入英文<input id="spelling-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false"></label><div id="answer-feedback" class="answer-feedback hidden"></div><button id="submit-spelling" class="primary-button wide" type="submit">提交答案</button>
+            <p class="eyebrow">听发音，看中文和词性，拼出英文</p><button type="button" class="sound-button" data-speak-current aria-label="播放发音">♬</button><p id="spell-pos" class="part-of-speech-badge">n.</p><p id="spell-meaning" class="spell-meaning">例子；实例</p><label class="answer-label">请输入英文<input id="spelling-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false"></label><div id="answer-feedback" class="answer-feedback hidden"></div><button id="submit-spelling" class="primary-button wide" type="submit">提交答案</button>
           </form>
           <div id="recognition-card" class="card-content hidden">
-            <p class="eyebrow">先看英文，回想中文意思</p><button type="button" class="sound-button" data-speak-current aria-label="播放发音">♬</button><h1 id="recognition-word">example</h1><button id="reveal-recognition" class="primary-button wide" type="button">查看释义</button><div id="recognition-answer" class="recognition-answer hidden"><p id="recognition-meaning" class="card-meaning">例子；实例</p><div class="recognition-actions"><button id="recognition-forgot" class="secondary-button" type="button">还不认识</button><button id="recognition-remembered" class="primary-button" type="button">认识</button></div></div>
+            <p class="eyebrow">先看英文和词性，回想中文意思</p><button type="button" class="sound-button" data-speak-current aria-label="播放发音">♬</button><h1 id="recognition-word">example</h1><p id="recognition-pos" class="part-of-speech-badge">n.</p><button id="reveal-recognition" class="primary-button wide" type="button">查看释义</button><div id="recognition-answer" class="recognition-answer hidden"><p id="recognition-meaning" class="card-meaning">例子；实例</p><div class="recognition-actions"><button id="recognition-forgot" class="secondary-button" type="button">还不认识</button><button id="recognition-remembered" class="primary-button" type="button">认识</button></div></div>
           </div>
         </div>
         <div id="study-complete" class="study-complete hidden"><span class="complete-mark">✓</span><p class="eyebrow">TODAY COMPLETE</p><h1>今天的任务完成啦！</h1><p id="complete-summary">每一次认真回想，都在让记忆变得更牢。</p><button id="back-home" class="primary-button">返回首页</button></div>

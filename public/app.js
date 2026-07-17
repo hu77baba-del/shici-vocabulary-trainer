@@ -189,6 +189,32 @@ function normalizeAnswer(value) {
   return value.trim().toLocaleLowerCase("en-US");
 }
 
+function isPhraseSpelling(spelling) {
+  return /\s/.test(String(spelling || "").trim());
+}
+
+function isKnownPartOfSpeech(value) {
+  return /^(?:(?:n|v|vt|vi|adj|adv|prep|pron|conj|num|art|interj|aux)\.?|modal\s+v\.)(?:\s*[\/，；、|]\s*(?:(?:n|v|vt|vi|adj|adv|prep|pron|conj|num|art|interj|aux)\.?|modal\s+v\.))*$/i.test(String(value || "").trim());
+}
+
+function formatPartOfSpeech(value) {
+  return String(value || "").split("/").filter(Boolean).join(" / ");
+}
+
+function partOfSpeechHtml(word) {
+  if (isPhraseSpelling(word.spelling)) return "";
+  if (!word.partOfSpeech) return '<span class="pos-pill missing">词性待补充</span>';
+  return `<span class="pos-pill${word.partOfSpeechNeedsReview ? " needs-review" : ""}">${escapeHtml(formatPartOfSpeech(word.partOfSpeech))}</span>`;
+}
+
+function renderStudyPartOfSpeech(selector, word) {
+  const node = $(selector);
+  const phrase = isPhraseSpelling(word.spelling);
+  node.classList.toggle("hidden", phrase);
+  node.classList.toggle("needs-review", !phrase && (!word.partOfSpeech || word.partOfSpeechNeedsReview));
+  node.textContent = word.partOfSpeech ? formatPartOfSpeech(word.partOfSpeech) : "词性待补充";
+}
+
 function speak(text) {
   if (!("speechSynthesis" in window)) return toast("当前浏览器不支持系统发音");
   speechSynthesis.cancel();
@@ -202,10 +228,11 @@ function speak(text) {
 
 function renderCandidates() {
   const body = $("#candidate-body");
-  const labels = { clear: "清晰", check: "建议检查", missing: "缺少释义", manual: "手工录入" };
+  const labels = { clear: "清晰", check: "建议检查", missing: "缺少释义", "missing-pos": "缺少词性", manual: "手工录入" };
   body.innerHTML = app.candidates.map((item, index) => {
-    const warning = item.warning || (item.meaning ? "clear" : "missing");
-    return `<tr data-index="${index}"><td>${index + 1}</td><td><input class="candidate-spelling" value="${escapeHtml(item.spelling)}" aria-label="第 ${index + 1} 行英文"></td><td><input class="candidate-meaning" value="${escapeHtml(item.meaning)}" aria-label="第 ${index + 1} 行中文释义"></td><td><span class="ocr-badge ${warning}">${labels[warning] || "建议检查"}</span></td><td><button class="row-delete" aria-label="删除第 ${index + 1} 行">×</button></td></tr>`;
+    const phrase = isPhraseSpelling(item.spelling);
+    const warning = !item.meaning ? "missing" : !phrase && !item.partOfSpeech ? "missing-pos" : item.partOfSpeechNeedsReview ? "check" : item.warning || "clear";
+    return `<tr data-index="${index}"><td>${index + 1}</td><td><input class="candidate-spelling" value="${escapeHtml(item.spelling)}" aria-label="第 ${index + 1} 行英文"></td><td><input class="candidate-pos" value="${escapeHtml(item.partOfSpeech || "")}" data-original="${escapeHtml(item.partOfSpeech || "")}" placeholder="${phrase ? "词组无需填写" : "如 n."}" aria-label="第 ${index + 1} 行词性"></td><td><input class="candidate-meaning" value="${escapeHtml(item.meaning)}" aria-label="第 ${index + 1} 行中文释义"></td><td><span class="ocr-badge ${warning}">${labels[warning] || "建议检查"}</span></td><td><button class="row-delete" aria-label="删除第 ${index + 1} 行">×</button></td></tr>`;
   }).join("");
   $("#candidate-count").textContent = `${app.candidates.length} 个词条`;
   $("#candidate-panel").classList.toggle("hidden", !app.candidates.length);
@@ -214,9 +241,17 @@ function renderCandidates() {
 function syncCandidateInputs() {
   $$("#candidate-body tr").forEach(row => {
     const index = Number(row.dataset.index);
+    const partOfSpeechInput = row.querySelector(".candidate-pos");
+    const partOfSpeech = partOfSpeechInput.value.trim();
+    const spelling = row.querySelector(".candidate-spelling").value;
+    const phrase = isPhraseSpelling(spelling);
+    const manuallyChanged = partOfSpeech !== partOfSpeechInput.dataset.original;
     app.candidates[index] = {
       ...app.candidates[index],
-      spelling: row.querySelector(".candidate-spelling").value,
+      spelling,
+      partOfSpeech: phrase ? "" : partOfSpeech,
+      partOfSpeechNeedsReview: phrase ? false : !partOfSpeech || !isKnownPartOfSpeech(partOfSpeech)
+        || (!manuallyChanged && app.candidates[index].partOfSpeechNeedsReview === true),
       meaning: row.querySelector(".candidate-meaning").value
     };
   });
@@ -362,8 +397,18 @@ async function recognizeFiles(files, forcedRotation = 0) {
 function parseManual() {
   const rows = $("#manual-text").value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const parsed = rows.map(line => {
-    const parts = line.split(/\t|[:：]/);
-    return { spelling: (parts.shift() || "").trim(), meaning: parts.join("：").trim(), confidence: 1, warning: "manual", sourceImageIndex: -1 };
+    const tabParts = line.split("\t").map(part => part.trim());
+    if (tabParts.length >= 3) {
+      const spelling = tabParts.shift() || "";
+      const partOfSpeech = tabParts.shift() || "";
+      return { spelling, partOfSpeech, partOfSpeechNeedsReview: !isPhraseSpelling(spelling) && !partOfSpeech, meaning: tabParts.join(" ").trim(), confidence: 1, warning: "manual", sourceImageIndex: -1 };
+    }
+    if (tabParts.length === 2) {
+      return { spelling: tabParts[0], partOfSpeech: "", partOfSpeechNeedsReview: !isPhraseSpelling(tabParts[0]), meaning: tabParts[1], confidence: 1, warning: "manual", sourceImageIndex: -1 };
+    }
+    const parts = line.split(/[:：]/);
+    const spelling = (parts.shift() || "").trim();
+    return { spelling, partOfSpeech: "", partOfSpeechNeedsReview: !isPhraseSpelling(spelling), meaning: parts.join("：").trim(), confidence: 1, warning: "manual", sourceImageIndex: -1 };
   }).filter(item => item.spelling || item.meaning);
   if (!parsed.length) return toast("请先输入单词和中文释义");
   app.candidates = parsed;
@@ -372,7 +417,10 @@ function parseManual() {
 
 async function importCandidates() {
   syncCandidateInputs();
-  const words = app.candidates.map(item => ({ spelling: item.spelling.trim(), meaning: item.meaning.trim() })).filter(item => item.spelling || item.meaning);
+  const words = app.candidates.map(item => ({
+    spelling: item.spelling.trim(), partOfSpeech: (item.partOfSpeech || "").trim(),
+    partOfSpeechNeedsReview: item.partOfSpeechNeedsReview === true, meaning: item.meaning.trim()
+  })).filter(item => item.spelling || item.meaning);
   if (!words.length) return toast("没有可以保存的词条");
   try {
     const data = await request("/api/words/import", { method: "POST", body: JSON.stringify({ words }) });
@@ -390,7 +438,8 @@ function filteredLibraryWords() {
   const filter = $("#status-filter").value;
   return app.state.words.filter(word => {
     const status = word.status === "learning" ? "review" : word.status;
-    return (filter === "all" || status === filter) && (!query || word.spelling.toLocaleLowerCase().includes(query) || word.meaning.includes(query));
+    return (filter === "all" || status === filter) && (!query || word.spelling.toLocaleLowerCase().includes(query)
+      || String(word.partOfSpeech || "").toLocaleLowerCase().includes(query) || word.meaning.includes(query));
   });
 }
 
@@ -399,7 +448,7 @@ function renderLibrary() {
   const words = filteredLibraryWords();
   const existingIds = new Set(app.state.words.map(word => word.id));
   app.librarySelection = new Set([...app.librarySelection].filter(id => existingIds.has(id)));
-  $("#library-body").innerHTML = words.map(word => `<tr data-id="${word.id}" class="${app.librarySelection.has(word.id) ? "library-row-selected" : ""}"><td><input class="library-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.librarySelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong><button class="speak-row">♬ 播放发音</button></td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.nextDueDate || "—"}</td><td>${word.failureCount}</td><td><button class="table-action edit-word">编辑</button> <button class="table-action reset-word">重学</button> <button class="table-action danger delete-word">删除</button></td></tr>`).join("");
+  $("#library-body").innerHTML = words.map(word => `<tr data-id="${word.id}" class="${app.librarySelection.has(word.id) ? "library-row-selected" : ""}"><td><input class="library-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.librarySelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong><button class="speak-row">♬ 播放发音</button></td><td class="pos-cell">${partOfSpeechHtml(word)}</td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.nextDueDate || "—"}</td><td>${word.failureCount}</td><td><button class="table-action edit-word">编辑</button> <button class="table-action reset-word">重学</button> <button class="table-action danger delete-word">删除</button></td></tr>`).join("");
   $("#library-empty").classList.toggle("hidden", words.length > 0);
   const selectAll = $("#library-select-all");
   selectAll.disabled = words.length === 0;
@@ -447,14 +496,15 @@ function filteredReviewWords() {
   const query = $("#review-search").value.trim().toLocaleLowerCase();
   const status = $("#review-status-filter").value;
   return learnedWords().filter(word => (status === "all" || word.status === status)
-    && (!query || word.spelling.toLocaleLowerCase().includes(query) || word.meaning.includes(query)));
+    && (!query || word.spelling.toLocaleLowerCase().includes(query)
+      || String(word.partOfSpeech || "").toLocaleLowerCase().includes(query) || word.meaning.includes(query)));
 }
 
 function renderReviewWords() {
   const words = filteredReviewWords();
   const eligibleIds = new Set(learnedWords().map(word => word.id));
   app.reviewSelection = new Set([...app.reviewSelection].filter(id => eligibleIds.has(id)));
-  $("#review-word-body").innerHTML = words.map(word => `<tr data-id="${word.id}"><td><input class="review-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.reviewSelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong></td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.failureCount}</td></tr>`).join("");
+  $("#review-word-body").innerHTML = words.map(word => `<tr data-id="${word.id}"><td><input class="review-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.reviewSelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong></td><td class="pos-cell">${partOfSpeechHtml(word)}</td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.failureCount}</td></tr>`).join("");
   $("#review-empty").classList.toggle("hidden", words.length > 0);
   $("#review-select-all").checked = words.length > 0 && words.every(word => app.reviewSelection.has(word.id));
   $("#review-select-all").indeterminate = words.some(word => app.reviewSelection.has(word.id)) && !words.every(word => app.reviewSelection.has(word.id));
@@ -512,10 +562,12 @@ async function editWord(id) {
   if (!word) return;
   const spelling = prompt("修改英文：", word.spelling);
   if (spelling === null) return;
+  const partOfSpeech = prompt("修改词性（词组可留空）：", word.partOfSpeech || "");
+  if (partOfSpeech === null) return;
   const meaning = prompt("修改中文释义：", word.meaning);
   if (meaning === null) return;
   try {
-    const data = await request(`/api/words/${id}`, { method: "PUT", body: JSON.stringify({ spelling, meaning }) });
+    const data = await request(`/api/words/${id}`, { method: "PUT", body: JSON.stringify({ spelling, partOfSpeech, meaning }) });
     app.state = data.state; renderLibrary(); toast("词条已更新");
   } catch (error) { toast(error.message); }
 }
@@ -587,6 +639,7 @@ function showFamiliarize() {
   $("#recognition-card").classList.add("hidden");
   study.currentId = word.id;
   $("#familiar-word").textContent = word.spelling;
+  renderStudyPartOfSpeech("#familiar-pos", word);
   $("#familiar-meaning").textContent = word.meaning;
   updateStudyProgress("认读新词", study.familiarIndex + 1, study.fresh.length);
   setTimeout(() => speak(word.spelling), 180);
@@ -616,6 +669,7 @@ function showNextRecognition() {
   $("#spelling-card").classList.add("hidden");
   $("#recognition-card").classList.remove("hidden");
   $("#recognition-word").textContent = word.spelling;
+  renderStudyPartOfSpeech("#recognition-pos", word);
   $("#recognition-meaning").textContent = word.meaning;
   $("#recognition-answer").classList.add("hidden");
   $("#reveal-recognition").classList.remove("hidden");
@@ -649,6 +703,7 @@ function showNextSpelling() {
   study.currentId = study.queue.shift();
   study.feedbackLocked = false;
   const word = currentWord();
+  renderStudyPartOfSpeech("#spell-pos", word);
   $("#spell-meaning").textContent = word.meaning;
   $("#spelling-input").value = "";
   $("#spelling-input").disabled = false;
@@ -785,7 +840,7 @@ function bindEvents() {
     if (app.retryFile) recognizeFiles([app.retryFile], app.retryRotation);
   });
   $("#parse-manual").addEventListener("click", parseManual);
-  $("#add-row").addEventListener("click", () => { syncCandidateInputs(); app.candidates.push({ spelling: "", meaning: "", confidence: 1, warning: "manual", sourceImageIndex: -1 }); renderCandidates(); });
+  $("#add-row").addEventListener("click", () => { syncCandidateInputs(); app.candidates.push({ spelling: "", partOfSpeech: "", partOfSpeechNeedsReview: true, meaning: "", confidence: 1, warning: "manual", sourceImageIndex: -1 }); renderCandidates(); });
   $("#candidate-body").addEventListener("click", event => {
     const button = event.target.closest(".row-delete");
     if (!button) return;

@@ -1,12 +1,12 @@
 [
-  { "spelling": "curious", "meaning": "好奇的" },
-  { "spelling": "magazine", "meaning": "杂志" },
-  { "spelling": "test", "meaning": "测试；检测" },
-  { "spelling": "windsurf", "meaning": "做帆板运动" },
-  { "spelling": "feeling", "meaning": "感受" },
-  { "spelling": "brave", "meaning": "勇敢的" },
-  { "spelling": "challenge", "meaning": "挑战" },
-  { "spelling": "machine", "meaning": "机器" },
-  { "spelling": "traffic", "meaning": "交通" },
-  { "spelling": "board", "meaning": "板" }
+  { "spelling": "curious", "partOfSpeech": "adj.", "meaning": "好奇的" },
+  { "spelling": "magazine", "partOfSpeech": "n.", "meaning": "杂志" },
+  { "spelling": "test", "partOfSpeech": "v.", "meaning": "测试；检测" },
+  { "spelling": "windsurf", "partOfSpeech": "v.", "meaning": "做帆板运动" },
+  { "spelling": "feeling", "partOfSpeech": "n.", "meaning": "感受" },
+  { "spelling": "brave", "partOfSpeech": "adj.", "meaning": "勇敢的" },
+  { "spelling": "challenge", "partOfSpeech": "n.", "meaning": "挑战" },
+  { "spelling": "machine", "partOfSpeech": "n.", "meaning": "机器" },
+  { "spelling": "traffic", "partOfSpeech": "n.", "meaning": "交通" },
+  { "spelling": "board", "partOfSpeech": "n.", "meaning": "板" }
 ]

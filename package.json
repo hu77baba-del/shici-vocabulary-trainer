@@ -6,10 +6,12 @@
   "scripts": {
     "build": "vite build && node scripts/copy-ocr-assets.js",
     "start": "node server.js",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js",
+    "migrate:pos": "node scripts/migrate-part-of-speech.js"
   },
   "devDependencies": {
     "@paddleocr/paddleocr-js": "0.4.2",
-    "vite": "8.1.4"
+    "vite": "8.1.4",
+    "wordpos": "2.1.0"
   }
 }

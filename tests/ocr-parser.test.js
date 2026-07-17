@@ -6,6 +6,8 @@ const expected = require("./fixtures/expected-ocr.json");
 const expectedMultiColumn = require("./fixtures/expected-ocr-e7bd80.json");
 const expectedStarred = require("./fixtures/expected-ocr-ad34e2.json");
 const expectedPerspective = require("./fixtures/expected-ocr-7ece03.json");
+const expectedWordsWithPartOfSpeech = require("./fixtures/expected-ocr-5de9cb.json");
+const expectedPhrasesWithoutPartOfSpeech = require("./fixtures/expected-ocr-0bab9e.json");
 const parser = require("../public/ocr-parser.js");
 
 const image = { width: 1600, height: 1200 };
@@ -99,7 +101,88 @@ test("多列表格会忽略音标词性表头页脚并保留单字释义", () =>
   assert.equal(result.matchedCount, 10);
   assert.equal(result.quality.missingCount, 0);
   assert.equal(result.quality.unmatchedChineseCount, 0);
-  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedMultiColumn);
+  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedMultiColumn.map(({ spelling, meaning }) => ({ spelling, meaning })));
+  assert.deepEqual(result.candidates.map(item => item.partOfSpeech), expectedMultiColumn.map((_, index) => index % 3 === 0 ? "adj." : "n."));
+  assert.ok(result.candidates.every(item => item.partOfSpeechNeedsReview === false));
+});
+
+test("单词表会逐行保留教材词性", () => {
+  const items = [
+    { text: "单词", score: 0.99, poly: box(300, 60, 80) },
+    { text: "音标", score: 0.99, poly: box(680, 60, 80) },
+    { text: "词性", score: 0.99, poly: box(1030, 60, 80) },
+    { text: "中文释义", score: 0.99, poly: box(1220, 60, 150) }
+  ];
+  expectedWordsWithPartOfSpeech.forEach((row, index) => {
+    const y = 150 + index * 76;
+    items.push({ text: row.spelling, score: 0.99, poly: box(300, y, 220) });
+    items.push({ text: `/${row.spelling}/`, score: 0.96, poly: box(680, y, 220) });
+    items.push({ text: row.partOfSpeech, score: 0.98, poly: box(1030, y, 90) });
+    items.push({ text: row.meaning, score: 0.99, poly: box(1220, y + 2, 300) });
+  });
+  const result = parser.parse(items, image, 0);
+  assert.equal(result.needsRetry, false);
+  assert.equal(result.needsReview, false);
+  assert.deepEqual(result.candidates.map(({ spelling, partOfSpeech, meaning }) => ({ spelling, partOfSpeech, meaning })), expectedWordsWithPartOfSpeech);
+});
+
+test("词组表忽略邻近词性噪声并保持词性为空", () => {
+  const items = [];
+  expectedPhrasesWithoutPartOfSpeech.forEach((row, index) => {
+    const y = 110 + index * 48;
+    items.push({ text: row.spelling, score: 0.99, poly: box(260, y, 560) });
+    items.push({ text: index % 2 ? "n." : "adj.", score: 0.98, poly: box(900, y, 80) });
+    items.push({ text: row.meaning, score: 0.99, poly: box(1080, y + 2, 380) });
+  });
+  const result = parser.parse(items, image, 0);
+  assert.equal(result.matchedCount, expectedPhrasesWithoutPartOfSpeech.length);
+  assert.equal(result.needsReview, false);
+  assert.deepEqual(result.candidates.map(({ spelling, partOfSpeech, meaning }) => ({ spelling, partOfSpeech, meaning })), expectedPhrasesWithoutPartOfSpeech);
+});
+
+test("多词性会规范化，低置信度和陌生缩写会提示校对", () => {
+  const items = [
+    { text: "light", score: 0.99, poly: box(300, 180, 200) },
+    { text: "n. / adj.", score: 0.99, poly: box(820, 180, 140) },
+    { text: "光；轻的", score: 0.99, poly: box(1120, 182, 220) },
+    { text: "popular", score: 0.99, poly: box(300, 260, 200) },
+    { text: "adj.", score: 0.8, poly: box(820, 260, 100) },
+    { text: "流行的", score: 0.99, poly: box(1120, 262, 220) },
+    { text: "honest", score: 0.99, poly: box(300, 340, 200) },
+    { text: "phr. v.", score: 0.99, poly: box(820, 340, 110) },
+    { text: "诚实的", score: 0.99, poly: box(1120, 342, 220) }
+  ];
+  const result = parser.parse(items, image, 0);
+  assert.equal(result.candidates[0].partOfSpeech, "n./adj.");
+  assert.equal(result.candidates[0].partOfSpeechNeedsReview, false);
+  assert.equal(result.candidates[1].partOfSpeech, "adj.");
+  assert.equal(result.candidates[1].partOfSpeechNeedsReview, true);
+  assert.equal(result.candidates[2].partOfSpeech, "phr. v.");
+  assert.equal(result.candidates[2].partOfSpeechNeedsReview, true);
+  assert.equal(result.candidates[2].warning, "check");
+  assert.equal(parser.isPartOfSpeech({ text: "n. / v.", score: 0.99 }), true);
+  assert.equal(parser.isPartOfSpeech({ text: "phr. v.", score: 0.99 }), true);
+  assert.equal(parser.isPartOfSpeech({ text: "phrasal verb", score: 0.99 }), false);
+});
+
+test("中间一行词性漏识别时不会把后续词性向上错挂", () => {
+  const rows = [
+    { spelling: "honest", partOfSpeech: "adj.", meaning: "诚实的" },
+    { spelling: "alive", partOfSpeech: "", meaning: "活着的" },
+    { spelling: "wrong", partOfSpeech: "adj.", meaning: "错误的" },
+    { spelling: "style", partOfSpeech: "n.", meaning: "风格" }
+  ];
+  const items = [];
+  rows.forEach((row, index) => {
+    const y = 180 + index * 86;
+    items.push({ text: row.spelling, score: 0.99, poly: box(300, y, 220, 58) });
+    if (row.partOfSpeech) items.push({ text: row.partOfSpeech, score: 0.98, poly: box(1030, y + 4, 90, 54) });
+    items.push({ text: row.meaning, score: 0.99, poly: box(1220, y + 2, 260, 58) });
+  });
+  const result = parser.parse(items, image, 0);
+  assert.deepEqual(result.candidates.map(item => item.partOfSpeech), ["adj.", "", "adj.", "n."]);
+  assert.equal(result.candidates[1].warning, "missing-pos");
+  assert.equal(result.candidates[2].warning, "clear");
 });
 
 test("透视倾斜的多列表格不会把整列释义串到上一行", () => {
@@ -122,7 +205,7 @@ test("透视倾斜的多列表格不会把整列释义串到上一行", () => {
   const result = parser.parse(items, image, 0);
   assert.equal(result.matchedCount, expectedPerspective.length);
   assert.ok(Math.abs(result.quality.rowSlope - slope) < 0.005);
-  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedPerspective);
+  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedPerspective.map(({ spelling, meaning }) => ({ spelling, meaning })));
 });
 
 test("低置信度单字中文不会作为释义导入", () => {
@@ -151,5 +234,5 @@ test("带星号教材词表会输出清洗后的完整七组词条", () => {
   });
   const result = parser.parse(items, image, 0);
   assert.equal(result.matchedCount, 7);
-  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedStarred);
+  assert.deepEqual(result.candidates.map(({ spelling, meaning }) => ({ spelling, meaning })), expectedStarred.map(({ spelling, meaning }) => ({ spelling, meaning })));
 });
