@@ -1,5 +1,13 @@
 "use strict";
 
+import {
+  isAppHistoryState,
+  makeHistoryState,
+  normalizeRoute,
+  routeFromHash,
+  routeUrl
+} from "/navigation.mjs";
+
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 
@@ -19,7 +27,11 @@ const app = {
   reviewSelection: new Set(),
   historyOffset: 0,
   historyTotal: 0,
-  currentReport: null
+  currentReport: null,
+  currentReportHistorical: false,
+  historyReady: false,
+  confirmOpen: false,
+  navigationLocked: false
 };
 
 const statusLabels = { new: "未学习", learning: "学习中", review: "复习中", mastered: "已掌握" };
@@ -44,11 +56,13 @@ function toast(message) {
 
 function confirmAction(title, message, confirmText = "确认") {
   return new Promise(resolve => {
+    app.confirmOpen = true;
     $("#modal-title").textContent = title;
     $("#modal-message").textContent = message;
     $("#modal-confirm").textContent = confirmText;
     $("#confirm-modal").classList.remove("hidden");
     const finish = value => {
+      app.confirmOpen = false;
       $("#confirm-modal").classList.add("hidden");
       $("#modal-confirm").onclick = null;
       $("#modal-cancel").onclick = null;
@@ -59,16 +73,46 @@ function confirmAction(title, message, confirmText = "确认") {
   });
 }
 
-function go(view) {
-  app.currentView = view;
-  $$(".view").forEach(node => node.classList.toggle("active", node.id === `view-${view}`));
-  $$(".nav-item").forEach(node => node.classList.toggle("active", node.dataset.view === view));
+function writeRoute(view, mode) {
+  if (!app.historyReady || mode === "none") return;
+  const state = makeHistoryState(view);
+  if (mode === "replace") {
+    history.replaceState(state, "", routeUrl(view));
+    return;
+  }
+  const alreadyCurrent = isAppHistoryState(history.state)
+    && history.state.view === view
+    && routeFromHash(location.hash) === view;
+  if (!alreadyCurrent) history.pushState(state, "", routeUrl(view));
+}
+
+function go(view, options = {}) {
+  const target = normalizeRoute(view);
+  writeRoute(target, options.historyMode || "push");
+  app.currentView = target;
+  $$(".view").forEach(node => node.classList.toggle("active", node.id === `view-${target}`));
+  $$(".nav-item").forEach(node => node.classList.toggle("active", node.dataset.view === target));
   $(".sidebar").classList.remove("open");
-  if (view === "home") renderHome();
-  if (view === "library") renderLibrary();
-  if (view === "review") renderReviewPlanner();
-  if (view === "growth") renderGrowth();
+  if (target === "home") renderHome();
+  if (target === "library") renderLibrary();
+  if (target === "review") renderReviewPlanner();
+  if (target === "growth") renderGrowth();
   window.scrollTo(0, 0);
+}
+
+function initializeHistory(requestedView) {
+  const target = normalizeRoute(requestedView);
+  if (isAppHistoryState(history.state) && !history.state.guard) {
+    history.replaceState(makeHistoryState(target), "", routeUrl(target));
+  } else {
+    history.replaceState(makeHistoryState("home", true), "", routeUrl("home"));
+    history.pushState(makeHistoryState(target), "", routeUrl(target));
+  }
+  app.historyReady = true;
+}
+
+function protectCurrentRoute() {
+  history.pushState(makeHistoryState(app.currentView), "", routeUrl(app.currentView));
 }
 
 function localDateKey(date = new Date()) {
@@ -235,10 +279,12 @@ function wordListHtml(words, hiddenCount = false) {
   return `<div class="report-word-list">${visible.map(word => `<div><strong>${escapeHtml(word.spelling)}</strong>${word.partOfSpeech ? `<span>${escapeHtml(formatPartOfSpeech(word.partOfSpeech))}</span>` : ""}<p>${escapeHtml(word.meaning)}</p></div>`).join("")}${rest.length ? `<div class="report-extra hidden">${rest.map(word => `<div><strong>${escapeHtml(word.spelling)}</strong>${word.partOfSpeech ? `<span>${escapeHtml(formatPartOfSpeech(word.partOfSpeech))}</span>` : ""}<p>${escapeHtml(word.meaning)}</p></div>`).join("")}</div><button class="text-button report-expand" type="button">查看其余 ${rest.length} 条</button>` : ""}</div>`;
 }
 
-function showCompletionReport(report, historical = false) {
+function showCompletionReport(report, historical = false, options = {}) {
   if (!report) return;
   app.currentReport = report;
-  go("study");
+  app.currentReportHistorical = historical;
+  app.study = null;
+  go("study", options);
   $("#study-card").classList.add("hidden");
   $("#study-complete").classList.remove("hidden");
   $("#study-complete").classList.toggle("celebrate", !historical && (report.levelAfter > report.levelBefore || report.newBadgeIds.length));
@@ -279,21 +325,23 @@ async function openHistoricalReport(id) {
   } catch (error) { toast(error.message); }
 }
 
-async function acknowledgeCurrentReport(destination) {
+async function acknowledgeCurrentReport(destination, options = {}) {
   const report = app.currentReport;
   if (report && !report.acknowledgedAt) {
     try {
       const data = await request(`/api/study-sessions/${report.id}/acknowledge`, { method: "POST", body: "{}" });
       app.state = data.state;
       report.acknowledgedAt = data.report.acknowledgedAt;
-    } catch (error) { return toast(error.message); }
+    } catch (error) { toast(error.message); return false; }
   }
   app.currentReport = null;
+  app.currentReportHistorical = false;
   if (destination === "growth") {
     $("#session-history").dataset.loaded = "";
     app.historyOffset = 0;
   }
-  go(destination);
+  go(destination, options);
+  return true;
 }
 
 async function saveDailyPlan() {
@@ -742,11 +790,13 @@ async function startServerSession(payload) {
   } catch (error) { toast(error.message); }
 }
 
-function resumeActiveSession() {
+function resumeActiveSession(options = {}) {
   const active = app.state.activeSession;
-  if (!active) return go("home");
+  if (!active) return go("home", options);
   app.study = { sessionId: active.id, source: active.source, activity: active.mode, manual: active.source !== "scheduled", total: active.total, currentId: active.currentWordId, feedbackLocked: false };
-  go("study");
+  app.currentReport = null;
+  app.currentReportHistorical = false;
+  go("study", options);
   showActiveStep();
 }
 
@@ -905,6 +955,8 @@ async function restoreBackup(file) {
 }
 
 function bindEvents() {
+  window.addEventListener("popstate", handleHistoryNavigation);
+  $$(".brand").forEach(link => link.addEventListener("click", event => { event.preventDefault(); go("home"); }));
   $$(".nav-item").forEach(button => button.addEventListener("click", () => go(button.dataset.view)));
   $$('[data-go]').forEach(button => button.addEventListener("click", () => go(button.dataset.go)));
   $("#mobile-menu").addEventListener("click", () => $(".sidebar").classList.toggle("open"));
@@ -1002,8 +1054,8 @@ function bindEvents() {
   $("#leave-study").addEventListener("click", async () => {
     if (await confirmAction("暂时退出学习？", "本场进度会保存在本机，今天再次打开时可以从当前位置继续。", "暂停学习")) go(app.study?.manual ? "review" : "home");
   });
-  $("#back-home").addEventListener("click", () => acknowledgeCurrentReport("home"));
-  $("#report-growth").addEventListener("click", () => acknowledgeCurrentReport("growth"));
+  $("#back-home").addEventListener("click", () => acknowledgeCurrentReport("home", { historyMode: "replace" }));
+  $("#report-growth").addEventListener("click", () => acknowledgeCurrentReport("growth", { historyMode: "replace" }));
   $("#load-more-sessions").addEventListener("click", loadMoreSessions);
   $("#session-history").addEventListener("click", event => {
     const row = event.target.closest("[data-session-id]");
@@ -1033,17 +1085,73 @@ function bindEvents() {
   });
 }
 
+async function showHistoryRoute(view) {
+  const target = normalizeRoute(view);
+  if (target !== "study") {
+    const historyMode = location.hash === routeUrl(target) ? "none" : "replace";
+    return go(target, { historyMode });
+  }
+  if (app.currentReport) return go("study", { historyMode: "none" });
+  if (app.state.activeSession) return resumeActiveSession({ historyMode: "none" });
+  go("home", { historyMode: "replace" });
+}
+
+async function handleHistoryNavigation(event) {
+  if (!app.historyReady) return;
+  if (app.confirmOpen || app.navigationLocked || !$("#migration-modal").classList.contains("hidden")) {
+    protectCurrentRoute();
+    return;
+  }
+
+  const target = isAppHistoryState(event.state) ? normalizeRoute(event.state.view) : routeFromHash(location.hash);
+  if (app.currentView === "study" && target !== "study") {
+    if (app.currentReportHistorical) {
+      app.currentReport = null;
+      app.currentReportHistorical = false;
+      return go("growth", { historyMode: "replace" });
+    }
+    if (app.currentReport) {
+      protectCurrentRoute();
+      app.navigationLocked = true;
+      const acknowledged = await acknowledgeCurrentReport("home", { historyMode: "replace" });
+      app.navigationLocked = false;
+      return acknowledged;
+    }
+    if (app.study || app.state.activeSession) {
+      protectCurrentRoute();
+      const leave = await confirmAction("暂时退出学习？", "本场进度会保存在本机，今天再次打开时可以从当前位置继续。", "暂停学习");
+      if (leave) go(app.study?.manual ? "review" : "home", { historyMode: "replace" });
+      return;
+    }
+  }
+
+  if (isAppHistoryState(event.state) && event.state.guard) {
+    go("home", { historyMode: "none" });
+    history.pushState(makeHistoryState("home"), "", routeUrl("home"));
+    return;
+  }
+  await showHistoryRoute(target);
+}
+
 async function init() {
   bindEvents();
   try {
     app.state = await request("/api/state");
     renderHome(); renderLibrary();
+    const requestedView = routeFromHash(location.hash);
+    initializeHistory(requestedView);
+    if (requestedView === "study") {
+      if (app.state.activeSession) resumeActiveSession({ historyMode: "none" });
+      else go("home", { historyMode: "replace" });
+    } else {
+      go(requestedView, { historyMode: "none" });
+    }
     if (app.state.achievement?.migrationNotice && !app.state.achievement.migrationNotice.acknowledgedAt) {
       const notice = app.state.achievement.migrationNotice;
       $("#migration-message").textContent = `已为过去的学习成果补回 ${notice.points} 星光值，并点亮 ${notice.badgeCount} 枚勋章。`;
       $("#migration-modal").classList.remove("hidden");
     } else if (app.state.pendingReport) {
-      showCompletionReport(app.state.pendingReport);
+      showCompletionReport(app.state.pendingReport, false, { historyMode: "replace" });
     }
   } catch (error) {
     toast(`无法读取本地数据：${error.message}`);
