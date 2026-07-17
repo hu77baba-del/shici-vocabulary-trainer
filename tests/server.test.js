@@ -51,6 +51,16 @@ test("首页和初始状态可读取", async () => {
   assert.match(html, /今天学习几个新词/);
   assert.match(html, /自主复习/);
   assert.doesNotMatch(html, /每天最多学习 10 个/);
+  const spellingCard = html.slice(html.indexOf('id="spelling-card"'), html.indexOf('id="recognition-card"'));
+  assert.match(spellingCard, /看中文和词性，拼出英文/);
+  assert.doesNotMatch(spellingCard, /data-speak-current|播放发音/, "拼写卡不能提供英文发音提示");
+  const appSource = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
+  assert.doesNotMatch(html, /先听一遍发音/);
+  assert.doesNotMatch(appSource, /听发音、看中文完成拼写/);
+  const spellingFlow = appSource.slice(appSource.indexOf("function showNextSpelling"), appSource.indexOf("function requeueLater"));
+  assert.doesNotMatch(spellingFlow, /speak\s*\(/, "进入拼写题时不能自动朗读英文");
+  assert.match(html.slice(html.indexOf('id="familiarize-card"'), html.indexOf('id="spelling-card"')), /data-speak-current/);
+  assert.match(html.slice(html.indexOf('id="recognition-card"'), html.indexOf('id="study-complete"')), /data-speak-current/);
   const state = await (await fetch(`${baseUrl}/api/state`)).json();
   assert.equal(state.version, 1);
   assert.deepEqual(state.reviewDelays, [1, 3, 7, 14, 30]);

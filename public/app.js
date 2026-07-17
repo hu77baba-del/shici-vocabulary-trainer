@@ -489,7 +489,7 @@ function syncReviewMode() {
     ? "正式复习使用拼写检测，答错词会在本轮自动回来。"
     : $("#review-activity").value === "recognition"
       ? "先看英文回想释义，再选择“认识”或“不认识”。"
-      : "听发音、看中文完成拼写，答错词会在本轮自动回来。";
+      : "看中文和词性完成拼写，答错词会在本轮自动回来。";
 }
 
 function filteredReviewWords() {
@@ -711,7 +711,6 @@ function showNextSpelling() {
   $("#submit-spelling").textContent = "提交答案";
   updateStudyProgress(study.manual ? "自主拼写" : "拼写练习", study.completed + 1, study.total);
   $("#spelling-input").focus();
-  speak(word.spelling);
 }
 
 function requeueLater(wordId) {
