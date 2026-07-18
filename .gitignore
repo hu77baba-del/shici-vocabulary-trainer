@@ -1,4 +1,5 @@
 node_modules/
+.playwright-cli/
 data/app-data.json
 data/backups/
 样例/

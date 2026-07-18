@@ -1,16 +1,18 @@
 {
   "name": "local-vocabulary-trainer",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "private": true,
   "description": "面向初中生的本地离线英语背单词工具",
   "scripts": {
     "build": "vite build && node scripts/copy-ocr-assets.js",
+    "build:pronunciation": "node scripts/build-pronunciation-dictionary.mjs",
     "start": "node server.js",
     "test": "node --test tests/*.test.js",
     "migrate:pos": "node scripts/migrate-part-of-speech.js"
   },
   "devDependencies": {
     "@paddleocr/paddleocr-js": "0.4.2",
+    "cmu-pronouncing-dictionary": "^3.0.0",
     "vite": "8.1.4",
     "wordpos": "2.1.0"
   }

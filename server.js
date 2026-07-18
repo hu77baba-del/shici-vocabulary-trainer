@@ -9,6 +9,7 @@ const {
   LEVELS, BADGES, normalizeAchievement, migrateGrowth, achievementSummary,
   levelFor, addReward, evaluateBadges, uniq
 } = require("./lib/growth");
+const { isListeningWord, buildListeningChoices, orderedChoiceIds } = require("./lib/phonetics");
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
@@ -65,7 +66,7 @@ function readStore() {
     throw new Error("数据文件结构无效");
   }
   parsed.settings = parsed.settings && typeof parsed.settings === "object" ? parsed.settings : {};
-  parsed.words = parsed.words.map(word => ({ ...word, ...normalizeWord(word) }));
+  parsed.words = parsed.words.map(normalizeStoredWord);
   parsed.studySessions = Array.isArray(parsed.studySessions) ? parsed.studySessions.slice(-500) : [];
   parsed.activeSession = parsed.activeSession && typeof parsed.activeSession === "object" ? parsed.activeSession : null;
   const needsMigration = !parsed.achievement?.initializedAt;
@@ -154,6 +155,15 @@ function normalizeWord(raw) {
   };
 }
 
+function normalizeStoredWord(word) {
+  return {
+    ...word,
+    ...normalizeWord(word),
+    listeningFailureCount: Number.isFinite(word.listeningFailureCount) ? Math.max(0, Math.trunc(word.listeningFailureCount)) : 0,
+    lastListeningFailedAt: typeof word.lastListeningFailedAt === "string" ? word.lastListeningFailedAt : null
+  };
+}
+
 function activeDailyPlan(store) {
   const plan = store.settings?.dailyNewPlan;
   if (!plan || plan.date !== dateKey() || !Array.isArray(plan.wordIds)) return null;
@@ -198,6 +208,11 @@ function removeWords(store, wordIds) {
   const plan = activeDailyPlan(store);
   if (plan) store.settings.dailyNewPlan = plan;
   if (store.activeSession) {
+    if (store.activeSession.mode === "listening" && Object.values(store.activeSession.listeningChoices || {}).some(choiceIds => choiceIds.some(id => ids.has(id)))) {
+      store.activeSession = null;
+    }
+  }
+  if (store.activeSession) {
     for (const key of ["taskIds", "newIds", "dueIds", "queue", "familiarizeQueue", "completedIds", "failedIds", "correctedIds", "continueIds"]) {
       if (Array.isArray(store.activeSession[key])) store.activeSession[key] = store.activeSession[key].filter(id => !ids.has(id));
     }
@@ -232,7 +247,7 @@ function publicState(store) {
 function publicActiveSession(store) {
   const session = store.activeSession;
   if (!session) return null;
-  return {
+  const result = {
     id: session.id, date: session.date, source: session.source, mode: session.mode, kind: session.kind,
     taskIds: session.taskIds, newIds: session.newIds, dueIds: session.dueIds,
     queue: session.queue, familiarizeQueue: session.familiarizeQueue,
@@ -240,6 +255,19 @@ function publicActiveSession(store) {
     failedIds: session.failedIds, correctedIds: session.correctedIds, continueIds: session.continueIds,
     currentWordId: session.familiarizeQueue[0] || session.queue[0] || null
   };
+  if (session.mode === "listening" && session.queue[0]) {
+    const wordId = session.queue[0];
+    const attempt = Number(session.listeningAttempts?.[wordId] || 0);
+    const choiceIds = session.listeningChoices?.[wordId] || [];
+    const words = new Map(store.words.map(word => [word.id, word]));
+    result.listeningQuestion = {
+      optionCount: choiceIds.length,
+      options: orderedChoiceIds(choiceIds, `${session.id}:${wordId}:${attempt}`)
+        .map(id => words.get(id)).filter(Boolean).map(word => ({ id: word.id, meaning: word.meaning })),
+      replayUsed: Array.isArray(session.listeningReplayKeys) && session.listeningReplayKeys.includes(`${wordId}:${attempt}`)
+    };
+  }
+  return result;
 }
 
 function sessionSummary(session) {
@@ -328,7 +356,8 @@ function createStudySession(store, body) {
   const now = new Date().toISOString();
   const today = dateKey();
   const source = ["scheduled", "manual-free", "manual-formal"].includes(body.source) ? body.source : "scheduled";
-  let mode = body.mode === "recognition" ? "recognition" : "spelling";
+  let mode = body.mode === "recognition" ? "recognition" : body.mode === "listening" ? "listening" : "spelling";
+  if (mode === "listening" && source !== "manual-free") throw new Error("听力认词只支持自由练习");
   let kind = source === "scheduled" ? "daily" : "manual";
   let tasks = [];
   let fresh = [];
@@ -376,6 +405,11 @@ function createStudySession(store, body) {
     if (!tasks.length || tasks.length !== ids.length) throw new Error("请选择有效的已学习词条");
     if (tasks.some(word => word.status === "new")) throw new Error("未学习的新词不能进入自主复习");
     if (source === "manual-formal") mode = "spelling";
+    if (mode === "listening") {
+      if (tasks.some(word => !isListeningWord(word))) throw new Error("听力认词只支持已经学习过的单词，词组不能进入听力题");
+      const uniqueMeanings = new Set(store.words.filter(isListeningWord).map(word => word.meaning.trim()));
+      if (uniqueMeanings.size < 4) throw new Error("至少需要 4 个中文释义不同的已学单词才能开始听力认词");
+    }
     due = tasks.filter(word => word.status === "learning" || (word.status === "review" && word.nextDueDate && word.nextDueDate <= today));
   }
 
@@ -388,8 +422,13 @@ function createStudySession(store, body) {
     completedIds: [],
     failedIds: kind === "daily" ? uniq(store.settings.dailyStudyProgress?.failedIds) : [],
     correctedIds: [], continueIds: [], correctStreaks: {}, rewardKeys: [],
-    levelBefore: levelFor(store.achievement.starlight).level
+    levelBefore: levelFor(store.achievement.starlight).level,
+    listeningChoices: {}, listeningAttempts: {}, listeningReplayKeys: []
   };
+  if (mode === "listening") {
+    const pool = store.words.filter(isListeningWord);
+    for (const word of tasks) session.listeningChoices[word.id] = buildListeningChoices(word, pool, 4);
+  }
   store.activeSession = session;
   return session;
 }
@@ -416,7 +455,7 @@ function completeStudySession(store, session, nowIso) {
   let dueIds = session.dueIds;
   let correctedIds = session.correctedIds;
   let keys = session.rewardKeys;
-  let title = session.source === "manual-free" ? "自由练习完成" : session.source === "manual-formal" ? "正式复习完成" : "今日追加学习";
+  let title = session.mode === "listening" ? "听力认词完成" : session.source === "manual-free" ? "自由练习完成" : session.source === "manual-formal" ? "正式复习完成" : "今日追加学习";
 
   if (session.kind === "daily") {
     const progress = store.settings.dailyStudyProgress;
@@ -477,7 +516,16 @@ function processAuthoritativeAttempt(store, body) {
   const beforeStatus = word.status;
   const beforeStep = word.reviewStep;
   const recognition = session.mode === "recognition";
-  const correct = recognition ? body.remembered === true : normalizeAnswer(body.answer) === normalizeAnswer(word.spelling);
+  const listening = session.mode === "listening";
+  let selectedWord = null;
+  if (listening) {
+    const selectedWordId = cleanText(body.selectedWordId, 80);
+    const choiceIds = session.listeningChoices?.[word.id] || [];
+    if (!choiceIds.includes(selectedWordId)) throw new Error("所选答案不属于当前听力题，请刷新后重试");
+    selectedWord = store.words.find(item => item.id === selectedWordId);
+    if (!selectedWord) throw new Error("所选答案已经不存在，请重新开始听力练习");
+  }
+  const correct = recognition ? body.remembered === true : listening ? selectedWord.id === word.id : normalizeAnswer(body.answer) === normalizeAnswer(word.spelling);
   let completedRound = recognition;
   session.queue.shift();
 
@@ -487,6 +535,19 @@ function processAuthoritativeAttempt(store, body) {
       session.continueIds = uniq([...session.continueIds, word.id]);
     }
     session.completedIds = uniq([...session.completedIds, word.id]);
+  } else if (listening && !correct) {
+    session.failedIds = uniq([...session.failedIds, word.id]);
+    const attempt = Number(session.listeningAttempts[word.id] || 0) + 1;
+    session.listeningAttempts[word.id] = attempt;
+    const position = session.queue.length >= 3 ? 2 + (attempt % 2) : session.queue.length;
+    session.queue.splice(Math.min(position, session.queue.length), 0, word.id);
+    word.listeningFailureCount = Number(word.listeningFailureCount || 0) + 1;
+    word.lastListeningFailedAt = nowIso;
+  } else if (listening) {
+    session.listeningAttempts[word.id] = Number(session.listeningAttempts[word.id] || 0) + 1;
+    completedRound = true;
+    session.completedIds = uniq([...session.completedIds, word.id]);
+    if (session.failedIds.includes(word.id)) session.correctedIds = uniq([...session.correctedIds, word.id]);
   } else if (!correct) {
     session.failedIds = uniq([...session.failedIds, word.id]);
     session.correctStreaks[word.id] = 0;
@@ -514,7 +575,7 @@ function processAuthoritativeAttempt(store, body) {
     session.completedIds = uniq([...session.completedIds, word.id]);
   }
 
-  if (!recognition && session.source !== "manual-free" && correct && completedRound) {
+  if (!recognition && !listening && session.source !== "manual-free" && correct && completedRound) {
     word.reviewStep = Math.min(word.reviewStep + 1, REVIEW_DELAYS.length - 1);
     if (word.reviewStep >= REVIEW_DELAYS.length - 1) {
       word.status = "mastered";
@@ -543,7 +604,8 @@ function processAuthoritativeAttempt(store, body) {
   );
   store.reviews.push({
     id: crypto.randomUUID(), attemptId, wordId: word.id, sessionId: session.id, source: session.source,
-    mode: session.mode, answer: recognition ? (correct ? "认识" : "还不认识") : cleanText(body.answer, 150),
+    mode: session.mode, answer: recognition ? (correct ? "认识" : "还不认识") : listening ? selectedWord.meaning : cleanText(body.answer, 150),
+    selectedWordId: listening ? selectedWord.id : undefined,
     correct, completedRound, sessionCompleted: willComplete, reviewedAt: nowIso,
     statusBefore: beforeStatus, statusAfter: word.status, stepBefore: beforeStep, stepAfter: word.reviewStep
   });
@@ -580,7 +642,7 @@ async function api(req, res, url) {
     return send(res, 200, { sessions: newest.slice(offset, offset + limit).map(sessionSummary), total: newest.length, nextOffset: offset + limit < newest.length ? offset + limit : null });
   }
 
-  const studyMatch = url.pathname.match(/^\/api\/study-sessions\/([0-9a-f-]+)(?:\/(familiarize|abandon|acknowledge))?$/i);
+  const studyMatch = url.pathname.match(/^\/api\/study-sessions\/([0-9a-f-]+)(?:\/(familiarize|abandon|acknowledge|listening-replay))?$/i);
   if (studyMatch && req.method === "GET" && !studyMatch[2]) {
     const report = store.studySessions.find(item => item.id === studyMatch[1]);
     if (!report) return send(res, 404, { error: "没有找到这份学习报告" });
@@ -592,6 +654,19 @@ async function api(req, res, url) {
     if (!session || session.id !== studyMatch[1]) throw new Error("学习场次已结束");
     if (session.familiarizeQueue[0] !== cleanText(body.wordId, 80)) throw new Error("认读顺序已变化，请刷新后继续");
     session.familiarizeQueue.shift();
+    session.updatedAt = new Date().toISOString();
+    atomicWrite(store);
+    return send(res, 200, { session: publicActiveSession(store), state: publicState(store) });
+  }
+  if (studyMatch && req.method === "POST" && studyMatch[2] === "listening-replay") {
+    const session = store.activeSession;
+    if (!session || session.id !== studyMatch[1] || session.mode !== "listening" || !session.queue[0]) throw new Error("当前没有可以重播的听力题");
+    const wordId = session.queue[0];
+    const attempt = Number(session.listeningAttempts?.[wordId] || 0);
+    const replayKey = `${wordId}:${attempt}`;
+    session.listeningReplayKeys ||= [];
+    if (session.listeningReplayKeys.includes(replayKey)) throw new Error("本题已经重播过一次");
+    session.listeningReplayKeys.push(replayKey);
     session.updatedAt = new Date().toISOString();
     atomicWrite(store);
     return send(res, 200, { session: publicActiveSession(store), state: publicState(store) });
@@ -634,7 +709,7 @@ async function api(req, res, url) {
       const word = normalizeWord(item);
       return {
         id: crypto.randomUUID(), ...word, status: "new", reviewStep: -1,
-        nextDueDate: null, failureCount: 0, createdAt: now, updatedAt: now
+        nextDueDate: null, failureCount: 0, listeningFailureCount: 0, lastListeningFailedAt: null, createdAt: now, updatedAt: now
       };
     });
     store.words.push(...added);
@@ -675,7 +750,7 @@ async function api(req, res, url) {
   if (wordMatch && req.method === "POST" && url.searchParams.get("action") === "reset") {
     const word = store.words.find(item => item.id === wordMatch[1]);
     if (!word) return send(res, 404, { error: "没有找到该词条" });
-    Object.assign(word, { status: "new", reviewStep: -1, nextDueDate: null, failureCount: 0, updatedAt: new Date().toISOString() });
+    Object.assign(word, { status: "new", reviewStep: -1, nextDueDate: null, failureCount: 0, listeningFailureCount: 0, lastListeningFailedAt: null, updatedAt: new Date().toISOString() });
     atomicWrite(store);
     return send(res, 200, { state: publicState(store) });
   }
@@ -740,7 +815,7 @@ async function api(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/restore") {
     const body = await readBody(req);
     if (!body || body.version !== 1 || !Array.isArray(body.words) || !Array.isArray(body.reviews)) throw new Error("备份文件结构无效");
-    const words = body.words.map(word => ({ ...word, ...normalizeWord(word) }));
+    const words = body.words.map(normalizeStoredWord);
     backupStore(store);
     atomicWrite({
       version: 1, words, reviews: body.reviews,
@@ -809,4 +884,4 @@ function listen(port) {
 
 listen(PORT_START);
 
-module.exports = { normalizeWord, dateKey, REVIEW_DELAYS };
+module.exports = { normalizeWord, normalizeStoredWord, dateKey, REVIEW_DELAYS };

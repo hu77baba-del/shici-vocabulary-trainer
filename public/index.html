@@ -109,7 +109,7 @@
         <div class="page-heading"><div><p class="eyebrow">PRACTICE YOUR WAY</p><h1>自主复习</h1><p class="lead">从已经学过的单词中自由选择，不会把未学习的新词提前带入复习。</p></div></div>
         <div class="review-settings-grid">
           <article class="panel review-setting-card"><label for="review-kind">复习性质</label><select id="review-kind"><option value="manual-free">自由练习（不改变复习日期）</option><option value="manual-formal">正式复习（推进学习进度）</option></select><small id="review-kind-hint">答错会计入易错统计，但不会改变原来的复习计划。</small></article>
-          <article class="panel review-setting-card"><label for="review-activity">练习方式</label><select id="review-activity"><option value="recognition">认读卡片</option><option value="spelling">拼写检测</option></select><small id="review-activity-hint">先看英文回想释义，再选择“认识”或“不认识”。</small></article>
+          <article class="panel review-setting-card"><label for="review-activity">练习方式</label><select id="review-activity"><option value="recognition">认读卡片</option><option value="spelling">拼写检测</option><option value="listening">听力认词</option></select><small id="review-activity-hint">先看英文回想释义，再选择“认识”或“不认识”。</small></article>
         </div>
         <div class="mode-tabs review-tabs"><button class="tab active" data-review-pick="auto">自动抽取</button><button class="tab" data-review-pick="manual">手动勾选</button></div>
         <article id="review-auto" class="panel review-picker active">
@@ -120,7 +120,7 @@
         <article id="review-manual" class="panel review-picker">
           <div class="panel-title"><div><h2>手动选择复习词</h2><p class="muted">搜索并勾选任意已经学习过的单词。</p></div><button id="start-selected-review" class="primary-button" type="button" disabled>复习已选 0 个</button></div>
           <div class="library-toolbar"><label class="search-box">⌕<input id="review-search" type="search" placeholder="搜索英文、词性或中文释义"></label><select id="review-status-filter"><option value="all">全部已学状态</option><option value="learning">学习中</option><option value="review">复习中</option><option value="mastered">已掌握</option></select></div>
-          <div class="table-wrap"><table><thead><tr><th><input id="review-select-all" type="checkbox" aria-label="全选当前结果"></th><th>英文</th><th>词性</th><th>中文释义</th><th>状态</th><th>错误</th></tr></thead><tbody id="review-word-body"></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th><input id="review-select-all" type="checkbox" aria-label="全选当前结果"></th><th>英文</th><th>词性</th><th>中文释义</th><th>状态</th><th id="review-error-heading">拼写错误</th></tr></thead><tbody id="review-word-body"></tbody></table></div>
           <div id="review-empty" class="empty-state hidden">没有符合条件的已学单词</div>
         </article>
       </section>
@@ -145,6 +145,13 @@
           </form>
           <div id="recognition-card" class="card-content hidden">
             <p class="eyebrow">先看英文和词性，回想中文意思</p><button type="button" class="sound-button" data-speak-current aria-label="播放发音">♬</button><h1 id="recognition-word">example</h1><p id="recognition-pos" class="part-of-speech-badge">n.</p><button id="reveal-recognition" class="primary-button wide" type="button">查看释义</button><div id="recognition-answer" class="recognition-answer hidden"><p id="recognition-meaning" class="card-meaning">例子；实例</p><div class="recognition-actions"><button id="recognition-forgot" class="secondary-button" type="button">还不认识</button><button id="recognition-remembered" class="primary-button" type="button">认识</button></div></div>
+          </div>
+          <div id="listening-card" class="card-content hidden">
+            <p class="eyebrow">听发音，选择正确的中文意思</p>
+            <button id="listening-replay" class="listening-replay-button" type="button" aria-label="再听一次"><span aria-hidden="true">♬</span><strong>再听一次</strong><small>本题还可播放 1 次</small></button>
+            <div id="listening-options" class="listening-options" role="group" aria-label="中文答案选项"></div>
+            <div id="listening-feedback" class="listening-feedback hidden" role="status" aria-live="polite"></div>
+            <button id="listening-next" class="primary-button wide hidden" type="button">继续 →</button>
           </div>
         </div>
         <div id="study-complete" class="study-complete report-card hidden" aria-live="polite">

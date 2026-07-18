@@ -344,4 +344,6 @@ test("旧格式备份恢复后自动补齐词性兼容字段", async () => {
   assert.equal(data.state.words[0].partOfSpeechNeedsReview, true);
   assert.equal(data.state.words[1].partOfSpeech, "");
   assert.equal(data.state.words[1].partOfSpeechNeedsReview, false);
+  assert.equal(data.state.words[0].listeningFailureCount, 0);
+  assert.equal(data.state.words[0].lastListeningFailedAt, null);
 });

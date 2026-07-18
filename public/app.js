@@ -391,15 +391,25 @@ function renderStudyPartOfSpeech(selector, word) {
   node.textContent = word.partOfSpeech ? formatPartOfSpeech(word.partOfSpeech) : "词性待补充";
 }
 
-function speak(text) {
-  if (!("speechSynthesis" in window)) return toast("当前浏览器不支持系统发音");
+function speak(text, callbacks = {}) {
+  if (!("speechSynthesis" in window)) {
+    toast("当前浏览器不支持系统发音");
+    callbacks.onError?.();
+    return false;
+  }
   speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = "en-US";
   utterance.rate = 0.82;
   const voices = speechSynthesis.getVoices();
   utterance.voice = voices.find(voice => /^en[-_](US|GB)/i.test(voice.lang) && /Samantha|Daniel|Karen|Google/i.test(voice.name)) || voices.find(voice => /^en/i.test(voice.lang)) || null;
+  utterance.onstart = () => callbacks.onStart?.();
+  utterance.onerror = () => {
+    toast(callbacks.errorMessage || "系统发音没有成功，请稍后再试");
+    callbacks.onError?.();
+  };
   speechSynthesis.speak(utterance);
+  return true;
 }
 
 function renderCandidates() {
@@ -638,9 +648,24 @@ function learnedWords() {
   return app.state ? app.state.words.filter(word => word.status !== "new") : [];
 }
 
+function isListeningWord(word) {
+  return word?.status !== "new" && Boolean(String(word.spelling || "").trim()) && !/[\s/]/.test(word.spelling);
+}
+
+function listeningWords() {
+  return learnedWords().filter(isListeningWord);
+}
+
+function listeningModeSelected() {
+  return $("#review-activity").value === "listening";
+}
+
 function reviewPool(kind) {
-  const words = learnedWords();
-  if (kind === "trouble") return words.filter(word => word.failureCount > 0).sort((a, b) => b.failureCount - a.failureCount || a.spelling.localeCompare(b.spelling));
+  const listening = listeningModeSelected();
+  const words = listening ? listeningWords() : learnedWords();
+  if (kind === "trouble") return listening
+    ? words.filter(word => word.listeningFailureCount > 0).sort((a, b) => b.listeningFailureCount - a.listeningFailureCount || String(b.lastListeningFailedAt || "").localeCompare(String(a.lastListeningFailedAt || "")) || a.spelling.localeCompare(b.spelling))
+    : words.filter(word => word.failureCount > 0).sort((a, b) => b.failureCount - a.failureCount || a.spelling.localeCompare(b.spelling));
   if (kind === "mastered") return words.filter(word => word.status === "mastered");
   return words;
 }
@@ -655,13 +680,25 @@ function shuffled(words) {
 }
 
 function syncReviewMode() {
+  const listeningOption = $("#review-activity option[value='listening']");
+  const enoughListeningChoices = new Set(listeningWords().map(word => word.meaning.trim())).size >= 4;
+  if (listeningModeSelected() && !enoughListeningChoices) $("#review-activity").value = "recognition";
+  const listening = listeningModeSelected();
+  if (listening) $("#review-kind").value = "manual-free";
+  $("#review-kind option[value='manual-formal']").disabled = listening;
   const formal = $("#review-kind").value === "manual-formal";
   if (formal) $("#review-activity").value = "spelling";
   $("#review-activity option[value='recognition']").disabled = formal;
+  listeningOption.disabled = formal || !enoughListeningChoices;
+  listeningOption.textContent = enoughListeningChoices ? "听力认词" : "听力认词（至少需 4 个不同释义）";
   $("#review-kind-hint").textContent = formal
     ? "答题结果会推进或重置正式复习阶段。"
     : "答错会计入易错统计，但不会改变原来的复习计划。";
-  $("#review-activity-hint").textContent = formal
+  $("#review-activity-hint").textContent = !enoughListeningChoices
+    ? "听力认词需至少 4 个中文释义不同的已学单词；词组和未学习单词不计入。"
+    : listening
+    ? "只播放已学单词的发音，固定四选一；词组不会进入听力题。"
+    : formal
     ? "正式复习使用拼写检测，答错词会在本轮自动回来。"
     : $("#review-activity").value === "recognition"
       ? "先看英文回想释义，再选择“认识”或“不认识”。"
@@ -671,30 +708,39 @@ function syncReviewMode() {
 function filteredReviewWords() {
   const query = $("#review-search").value.trim().toLocaleLowerCase();
   const status = $("#review-status-filter").value;
-  return learnedWords().filter(word => (status === "all" || word.status === status)
+  const words = listeningModeSelected() ? listeningWords() : learnedWords();
+  return words.filter(word => (status === "all" || word.status === status)
     && (!query || word.spelling.toLocaleLowerCase().includes(query)
       || String(word.partOfSpeech || "").toLocaleLowerCase().includes(query) || word.meaning.includes(query)));
 }
 
 function renderReviewWords() {
   const words = filteredReviewWords();
-  const eligibleIds = new Set(learnedWords().map(word => word.id));
+  const listening = listeningModeSelected();
+  const eligibleIds = new Set((listening ? listeningWords() : learnedWords()).map(word => word.id));
   app.reviewSelection = new Set([...app.reviewSelection].filter(id => eligibleIds.has(id)));
-  $("#review-word-body").innerHTML = words.map(word => `<tr data-id="${word.id}"><td><input class="review-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.reviewSelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong></td><td class="pos-cell">${partOfSpeechHtml(word)}</td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${word.failureCount}</td></tr>`).join("");
+  $("#review-error-heading").textContent = listening ? "听力错误" : "拼写错误";
+  $("#review-word-body").innerHTML = words.map(word => `<tr data-id="${word.id}"><td><input class="review-word-check" type="checkbox" aria-label="选择 ${escapeHtml(word.spelling)}" ${app.reviewSelection.has(word.id) ? "checked" : ""}></td><td class="word-cell"><strong>${escapeHtml(word.spelling)}</strong></td><td class="pos-cell">${partOfSpeechHtml(word)}</td><td>${escapeHtml(word.meaning)}</td><td><span class="status-pill ${word.status}">${statusLabels[word.status]}</span></td><td>${listening ? word.listeningFailureCount : word.failureCount}</td></tr>`).join("");
   $("#review-empty").classList.toggle("hidden", words.length > 0);
   $("#review-select-all").checked = words.length > 0 && words.every(word => app.reviewSelection.has(word.id));
   $("#review-select-all").indeterminate = words.some(word => app.reviewSelection.has(word.id)) && !words.every(word => app.reviewSelection.has(word.id));
-  $("#start-selected-review").disabled = app.reviewSelection.size === 0;
+  const enoughListeningChoices = !listening || new Set(listeningWords().map(word => word.meaning.trim())).size >= 4;
+  $("#start-selected-review").disabled = app.reviewSelection.size === 0 || !enoughListeningChoices;
   $("#start-selected-review").textContent = `复习已选 ${app.reviewSelection.size} 个`;
 }
 
 function renderReviewAuto() {
   const kind = $("#review-pool").value;
   const pool = reviewPool(kind);
-  $("#review-eligible-count").textContent = `${learnedWords().length} 个可复习`;
+  const listening = listeningModeSelected();
+  const available = listening ? listeningWords() : learnedWords();
+  const enoughListeningChoices = !listening || new Set(available.map(word => word.meaning.trim())).size >= 4;
+  $("#review-eligible-count").textContent = `${available.length} 个可复习`;
   $("#review-count").max = String(pool.length);
-  $("#review-auto-hint").textContent = pool.length ? `当前范围共有 ${pool.length} 个单词，请输入 1 至 ${pool.length}。` : "当前范围还没有可复习的单词。";
-  $("#start-auto-review").disabled = pool.length === 0;
+  $("#review-auto-hint").textContent = !enoughListeningChoices
+    ? "至少需要 4 个中文释义不同的已学单词才能开始听力认词。"
+    : pool.length ? `当前范围共有 ${pool.length} 个单词，请输入 1 至 ${pool.length}。` : `当前范围还没有可复习的${listening ? "听力单词" : "单词"}。`;
+  $("#start-auto-review").disabled = pool.length === 0 || !enoughListeningChoices;
 }
 
 function renderReviewPlanner() {
@@ -705,9 +751,11 @@ function renderReviewPlanner() {
 }
 
 async function startManualReview(words) {
-  const eligible = words.filter(word => word?.status !== "new");
+  const listening = listeningModeSelected();
+  const eligible = words.filter(word => word?.status !== "new" && (!listening || isListeningWord(word)));
   if (!eligible.length) return toast("请选择至少一个已经学习过的单词");
-  const source = $("#review-kind").value;
+  if (listening && new Set(listeningWords().map(word => word.meaning.trim())).size < 4) return toast("至少需要 4 个中文释义不同的已学单词才能开始听力认词");
+  const source = listening ? "manual-free" : $("#review-kind").value;
   const activity = source === "manual-formal" ? "spelling" : $("#review-activity").value;
   await startServerSession({ source, mode: activity, wordIds: eligible.map(word => word.id) });
 }
@@ -793,7 +841,7 @@ async function startServerSession(payload) {
 function resumeActiveSession(options = {}) {
   const active = app.state.activeSession;
   if (!active) return go("home", options);
-  app.study = { sessionId: active.id, source: active.source, activity: active.mode, manual: active.source !== "scheduled", total: active.total, currentId: active.currentWordId, feedbackLocked: false };
+  app.study = { sessionId: active.id, source: active.source, activity: active.mode, manual: active.source !== "scheduled", total: active.total, currentId: active.currentWordId, feedbackLocked: false, listeningReplayInFlight: false };
   app.currentReport = null;
   app.currentReportHistorical = false;
   go("study", options);
@@ -815,6 +863,7 @@ function showFamiliarize() {
   $("#familiarize-card").classList.remove("hidden");
   $("#spelling-card").classList.add("hidden");
   $("#recognition-card").classList.add("hidden");
+  $("#listening-card").classList.add("hidden");
   app.study.currentId = word.id;
   $("#familiar-word").textContent = word.spelling;
   renderStudyPartOfSpeech("#familiar-pos", word);
@@ -828,6 +877,7 @@ function beginSpelling() {
   $("#study-complete").classList.add("hidden");
   $("#familiarize-card").classList.add("hidden");
   $("#recognition-card").classList.add("hidden");
+  $("#listening-card").classList.add("hidden");
   $("#spelling-card").classList.remove("hidden");
   showNextSpelling();
 }
@@ -846,6 +896,7 @@ function showNextRecognition() {
   $("#familiarize-card").classList.add("hidden");
   $("#spelling-card").classList.add("hidden");
   $("#recognition-card").classList.remove("hidden");
+  $("#listening-card").classList.add("hidden");
   $("#recognition-word").textContent = word.spelling;
   renderStudyPartOfSpeech("#recognition-pos", word);
   $("#recognition-meaning").textContent = word.meaning;
@@ -868,6 +919,95 @@ async function gradeRecognition(correct) {
     if (data.completionReport) return showCompletionReport(data.completionReport);
   } catch (error) { return toast(error.message); }
   showNextRecognition();
+}
+
+function showNextListening() {
+  const active = app.state.activeSession;
+  const question = active?.listeningQuestion;
+  if (!active?.queue.length || !question || question.options.length !== 4) return toast("当前听力题无法生成四个有效选项，请结束本场后重试");
+  const word = app.state.words.find(item => item.id === active.currentWordId);
+  if (!word) return toast("当前听力单词已经不存在");
+  app.study.currentId = word.id;
+  app.study.feedbackLocked = false;
+  app.study.pendingReport = null;
+  $("#study-card").classList.remove("hidden");
+  $("#study-complete").classList.add("hidden");
+  $("#familiarize-card").classList.add("hidden");
+  $("#spelling-card").classList.add("hidden");
+  $("#recognition-card").classList.add("hidden");
+  $("#listening-card").classList.remove("hidden");
+  $("#listening-feedback").textContent = "";
+  $("#listening-feedback").className = "listening-feedback hidden";
+  $("#listening-next").classList.add("hidden");
+  $("#listening-options").innerHTML = question.options.map((option, index) => `<button class="listening-option" type="button" data-option-id="${option.id}" aria-label="选项 ${index + 1}：${escapeHtml(option.meaning)}">${escapeHtml(option.meaning)}</button>`).join("");
+  const replay = $("#listening-replay");
+  replay.disabled = question.replayUsed;
+  replay.querySelector("strong").textContent = question.replayUsed ? "本题已重播" : "再听一次";
+  replay.querySelector("small").textContent = question.replayUsed ? "请根据发音选择答案" : "本题还可播放 1 次";
+  updateStudyProgress("听力认词", active.completed + 1, active.total);
+  setTimeout(() => speak(word.spelling, { errorMessage: "系统发音没有成功，请点击“再听一次”重试" }), 220);
+}
+
+function replayListeningWord() {
+  const word = currentWord();
+  const replay = $("#listening-replay");
+  if (!word || replay.disabled || app.study.listeningReplayInFlight) return;
+  app.study.listeningReplayInFlight = true;
+  replay.disabled = true;
+  let started = false;
+  const launched = speak(word.spelling, {
+    onStart: async () => {
+      started = true;
+      try {
+        const data = await request(`/api/study-sessions/${app.study.sessionId}/listening-replay`, { method: "POST", body: "{}" });
+        app.state = data.state;
+        replay.querySelector("strong").textContent = "本题已重播";
+        replay.querySelector("small").textContent = "请根据发音选择答案";
+      } catch (error) { toast(error.message); }
+      app.study.listeningReplayInFlight = false;
+    },
+    onError: () => {
+      app.study.listeningReplayInFlight = false;
+      if (!started) replay.disabled = false;
+    }
+  });
+  if (!launched) {
+    app.study.listeningReplayInFlight = false;
+    replay.disabled = false;
+  }
+}
+
+async function gradeListening(selectedWordId) {
+  if (app.study.feedbackLocked) return;
+  const word = currentWord();
+  const optionButtons = $$("#listening-options .listening-option");
+  app.study.feedbackLocked = true;
+  $("#listening-replay").disabled = true;
+  optionButtons.forEach(button => { button.disabled = true; });
+  let data;
+  try {
+    data = await request("/api/attempts", { method: "POST", body: JSON.stringify({
+      attemptId: crypto.randomUUID(), wordId: word.id, sessionId: app.study.sessionId, selectedWordId
+    }) });
+    app.state = data.state;
+  } catch (error) {
+    app.study.feedbackLocked = false;
+    $("#listening-replay").disabled = Boolean(app.state.activeSession?.listeningQuestion?.replayUsed);
+    optionButtons.forEach(button => { button.disabled = false; });
+    return toast(error.message);
+  }
+  optionButtons.forEach(button => {
+    if (button.dataset.optionId === word.id) button.classList.add("correct");
+    if (!data.correct && button.dataset.optionId === selectedWordId) button.classList.add("wrong");
+  });
+  const feedback = $("#listening-feedback");
+  feedback.classList.remove("hidden", "wrong");
+  if (!data.correct) feedback.classList.add("wrong");
+  const pos = word.partOfSpeech ? `<span class="part-of-speech-inline">${escapeHtml(formatPartOfSpeech(word.partOfSpeech))}</span>` : "";
+  feedback.innerHTML = `<strong>${escapeHtml(word.spelling)}${pos ? ` ${pos}` : ""}</strong><span>${escapeHtml(word.meaning)}</span><p>${data.correct ? "听对了，很棒！" : "这次没有听出来，稍后会再练一次。"}</p>`;
+  $("#listening-next").textContent = data.completionReport ? "查看结果" : "继续 →";
+  $("#listening-next").classList.remove("hidden");
+  app.study.pendingReport = data.completionReport || null;
 }
 
 function showNextSpelling() {
@@ -932,6 +1072,7 @@ function showActiveStep() {
   app.study.currentId = active.currentWordId;
   if (active.familiarizeQueue.length) return showFamiliarize();
   if (active.mode === "recognition") return showNextRecognition();
+  if (active.mode === "listening") return showNextListening();
   beginSpelling();
 }
 
@@ -971,8 +1112,8 @@ function bindEvents() {
     $$('[data-review-pick]').forEach(node => node.classList.toggle("active", node === tab));
     $$(".review-picker").forEach(node => node.classList.toggle("active", node.id === `review-${tab.dataset.reviewPick}`));
   }));
-  $("#review-kind").addEventListener("change", syncReviewMode);
-  $("#review-activity").addEventListener("change", syncReviewMode);
+  $("#review-kind").addEventListener("change", renderReviewPlanner);
+  $("#review-activity").addEventListener("change", renderReviewPlanner);
   $("#review-pool").addEventListener("change", renderReviewAuto);
   $("#start-auto-review").addEventListener("click", startAutoReview);
   $("#start-selected-review").addEventListener("click", startSelectedReview);
@@ -1051,6 +1192,12 @@ function bindEvents() {
   $("#reveal-recognition").addEventListener("click", () => { $("#reveal-recognition").classList.add("hidden"); $("#recognition-answer").classList.remove("hidden"); });
   $("#recognition-remembered").addEventListener("click", () => gradeRecognition(true));
   $("#recognition-forgot").addEventListener("click", () => gradeRecognition(false));
+  $("#listening-replay").addEventListener("click", replayListeningWord);
+  $("#listening-options").addEventListener("click", event => {
+    const option = event.target.closest(".listening-option");
+    if (option) gradeListening(option.dataset.optionId);
+  });
+  $("#listening-next").addEventListener("click", () => app.study.pendingReport ? showCompletionReport(app.study.pendingReport) : showActiveStep());
   $("#leave-study").addEventListener("click", async () => {
     if (await confirmAction("暂时退出学习？", "本场进度会保存在本机，今天再次打开时可以从当前位置继续。", "暂停学习")) go(app.study?.manual ? "review" : "home");
   });
